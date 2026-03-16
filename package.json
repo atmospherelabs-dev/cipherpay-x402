@@ -1,0 +1,63 @@
+{
+  "name": "@cipherpay/x402",
+  "version": "0.1.0",
+  "description": "Accept private Zcash payments on any API via the x402 protocol. CipherPay is the Zcash facilitator.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "test": "node --test dist/test.js"
+  },
+  "keywords": [
+    "zcash",
+    "x402",
+    "payments",
+    "privacy",
+    "ai-agents",
+    "micropayments",
+    "facilitator",
+    "shielded",
+    "http-402",
+    "cipherpay"
+  ],
+  "author": "Atmosphere Labs",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ALabsProducts/cipherpay-x402"
+  },
+  "homepage": "https://cipherpay.app/docs#x402",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  },
+  "peerDependencies": {
+    "express": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "express": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
