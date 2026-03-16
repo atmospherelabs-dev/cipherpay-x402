@@ -1,8 +1,8 @@
-# Proposal: Add Zcash (Shielded) as a Supported Network in x402
+# Proposal: Add Zcash to x402 — `exact` scheme on `zcash:mainnet`
 
 ## Summary
 
-Add Zcash as a supported network in the x402 protocol, enabling fully private AI agent payments via shielded transactions. CipherPay ([cipherpay.app](https://cipherpay.app)) serves as the Zcash facilitator.
+Add Zcash as a supported network for the `exact` scheme in x402, enabling fully private AI agent payments via shielded transactions. CipherPay ([cipherpay.app](https://cipherpay.app)) serves as the Zcash facilitator.
 
 ## Motivation
 
@@ -12,17 +12,17 @@ Zcash shielded transactions encrypt sender, receiver, amount, and memo on-chain.
 
 ## Network Identifiers (CAIP-2)
 
-| Name | CAIP-2 ID | Description |
-|------|-----------|-------------|
-| `zcash` | `zcash:mainnet` | Zcash mainnet |
-| `zcash-testnet` | `zcash:testnet` | Zcash testnet |
+| Name | CAIP-2 ID |
+|------|-----------|
+| Zcash mainnet | `zcash:mainnet` |
+| Zcash testnet | `zcash:testnet` |
 
 ## How It Works
 
-Zcash shielded payments work differently from EVM/Solana:
+Zcash implements the `exact` scheme with a client-driven settlement model:
 
-- **No off-chain signatures**: Zcash shielded transactions don't use `transferWithAuthorization` or EIP-3009. The client sends an on-chain transaction directly.
-- **Trial decryption verification**: The facilitator verifies payments by performing Orchard trial decryption using the recipient's viewing key (UFVK). This confirms the payment was made without revealing sender identity.
+- **Client sends on-chain directly**: The client broadcasts a shielded ZEC transaction before sending the payment header.
+- **Trial decryption verification**: The facilitator verifies payments by performing Orchard trial decryption using the recipient's UFVK. This confirms the payment was made without revealing sender identity.
 - **Verify-only facilitator**: CipherPay does not handle settlement — the client sends ZEC directly to the recipient's address. CipherPay only answers "did this txid pay the expected amount to this recipient?"
 
 ### Flow
@@ -34,78 +34,88 @@ Client                    Resource Server              CipherPay (Facilitator)
   │───────────────────────────>│                              │
   │                            │                              │
   │  402 Payment Required      │                              │
+  │  PAYMENT-REQUIRED: base64  │                              │
   │  { accepts: [{             │                              │
+  │      scheme: "exact",      │                              │
   │      network: "zcash:mainnet",                            │
-  │      token: "ZEC",         │                              │
-  │      amount: "0.001",      │                              │
-  │      address: "u1..." }]}  │                              │
+  │      asset: "ZEC",         │                              │
+  │      amount: "100000",     │                              │
+  │      payTo: "u1..." }]}    │                              │
   │<───────────────────────────│                              │
   │                            │                              │
   │  (sends shielded ZEC       │                              │
-  │   on-chain to u1...)       │                              │
+  │   on-chain to payTo)       │                              │
   │                            │                              │
   │  GET /api/data             │                              │
-  │  X-PAYMENT: txid=abc123    │                              │
+  │  PAYMENT-SIGNATURE: base64 │                              │
+  │  { payload: {txid:"..."} } │                              │
   │───────────────────────────>│                              │
   │                            │  POST /api/x402/verify       │
   │                            │  { txid, expected_amount }   │
   │                            │─────────────────────────────>│
   │                            │                              │
-  │                            │  { valid: true,              │
-  │                            │    received_zec: 0.001 }     │
+  │                            │  { valid: true }             │
   │                            │<─────────────────────────────│
   │                            │                              │
-  │  200 OK + data             │                              │
+  │  200 OK                    │                              │
+  │  PAYMENT-RESPONSE: base64  │                              │
   │<───────────────────────────│                              │
 ```
 
-### Key Differences from EVM Scheme
+### Key Differences from Other Chains
 
-| Aspect | EVM (exact) | Zcash (shielded) |
-|--------|-------------|-------------------|
-| Authorization | Off-chain EIP-712 signature | On-chain transaction |
-| Settlement | Facilitator submits tx | Client sends directly |
-| Verification | Check on-chain transfer event | Trial decryption of Orchard outputs |
-| Privacy | Fully public | Fully encrypted |
-| Latency | Instant (signature check) | ~5-10 seconds (mempool propagation) |
-| Gas | Facilitator sponsors | Client pays network fee |
-| Token | Any EIP-3009 token | ZEC (native) |
+| Aspect | EVM (exact) | SVM (exact) | Zcash (exact) |
+|--------|-------------|-------------|---------------|
+| Authorization | Off-chain EIP-712 signature | Partially-signed tx | On-chain transaction |
+| Settlement | Facilitator submits tx | Facilitator co-signs tx | Client sends directly |
+| Verification | Signature recovery + simulation | Tx inspection + simulation | Trial decryption |
+| Privacy | Fully public | Fully public | Fully encrypted |
+| Gas | Facilitator sponsors | Facilitator sponsors | Client pays (~0.00001 ZEC) |
+| Token | Any ERC-20 | Any SPL | ZEC (native) |
 
-### Scheme: `shielded`
+### PaymentRequirements
 
-We propose a new scheme type `shielded` alongside the existing `exact` scheme:
-
-```typescript
-// Resource server route config
-const routes = {
-  "GET /api/data": {
-    accepts: [{
-      scheme: "shielded",
-      network: "zcash:mainnet",
-      token: "ZEC",
-      amount: "0.001",
-      address: "u1recipientaddress...",
-      facilitator: "https://api.cipherpay.app",
-    }],
-  },
-};
+```json
+{
+  "scheme": "exact",
+  "network": "zcash:mainnet",
+  "asset": "ZEC",
+  "amount": "100000",
+  "payTo": "u1recipientaddress...",
+  "maxTimeoutSeconds": 120,
+  "extra": {}
+}
 ```
 
-The `shielded` scheme tells clients that:
-1. Payment must be an on-chain shielded transaction (not a signed authorization)
-2. The txid should be sent in the `X-PAYMENT` header
-3. The facilitator verifies via trial decryption, not on-chain event lookup
+### PaymentPayload
+
+```json
+{
+  "x402Version": 2,
+  "accepted": {
+    "scheme": "exact",
+    "network": "zcash:mainnet",
+    "asset": "ZEC",
+    "amount": "100000",
+    "payTo": "u1recipientaddress...",
+    "maxTimeoutSeconds": 120,
+    "extra": {}
+  },
+  "payload": {
+    "txid": "7f3a9b2c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f"
+  }
+}
+```
 
 ## Facilitator: CipherPay
 
-**CipherPay** ([cipherpay.app](https://cipherpay.app)) is an open-source, non-custodial Zcash payment processor built by [Atmosphere Labs](https://github.com/ALabsProducts).
+**CipherPay** ([cipherpay.app](https://cipherpay.app)) is an open-source, non-custodial Zcash payment processor built by [Atmosphere Labs](https://github.com/atmospherelabs-dev).
 
 - **Verify endpoint**: `POST https://api.cipherpay.app/api/x402/verify`
 - **Auth**: `Authorization: Bearer <api_key>` (merchants register with their UFVK)
 - **Verification**: Orchard trial decryption using merchant's viewing key
-- **Non-custodial**: CipherPay never holds funds
-- **Free**: x402 verification carries no facilitator fee
-- **Open source**: [github.com/ALabsProducts/cipherpay](https://github.com/ALabsProducts/cipherpay)
+- **Non-custodial**: CipherPay never holds funds — viewing key is read-only
+- **Open source**: [github.com/atmospherelabs-dev/cipherpay](https://github.com/atmospherelabs-dev/cipherpay)
 
 ### Server middleware (npm)
 
@@ -129,20 +139,26 @@ Servers can offer both transparent and private payment options:
 
 ```json
 {
+  "x402Version": 2,
+  "resource": { "url": "/api/data" },
   "accepts": [
     {
       "scheme": "exact",
       "network": "eip155:8453",
-      "price": "$0.01",
-      "payTo": "0xabc..."
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "amount": "10000",
+      "payTo": "0xabc...",
+      "maxTimeoutSeconds": 60,
+      "extra": { "assetTransferMethod": "eip3009", "name": "USDC", "version": "2" }
     },
     {
-      "scheme": "shielded",
+      "scheme": "exact",
       "network": "zcash:mainnet",
-      "token": "ZEC",
-      "amount": "0.001",
-      "address": "u1abc...",
-      "facilitator": "https://api.cipherpay.app"
+      "asset": "ZEC",
+      "amount": "100000",
+      "payTo": "u1abc...",
+      "maxTimeoutSeconds": 120,
+      "extra": {}
     }
   ]
 }
@@ -152,15 +168,14 @@ Agents with Zcash wallets choose the shielded option for privacy. Agents with on
 
 ## Implementation Plan
 
-1. Add `zcash:mainnet` and `zcash:testnet` to the network identifier reference
-2. Define the `shielded` scheme type in the x402 spec
-3. List CipherPay as a facilitator on the x402 Ecosystem page
-4. Add Zcash examples to the x402 documentation
+1. **PR 1 (Spec)**: Add `specs/schemes/exact/scheme_exact_zcash.md`
+2. **PR 2 (Implementation)**: TypeScript reference implementation in `typescript/packages/mechanisms/zcash/`
+3. **Facilitator listing**: Add CipherPay to the x402 ecosystem/facilitator page
 
 ## References
 
 - [x402 Protocol](https://x402.org)
 - [CipherPay](https://cipherpay.app)
-- [CipherPay x402 SDK](https://github.com/ALabsProducts/cipherpay-x402)
+- [@cipherpay/x402 on npm](https://www.npmjs.com/package/@cipherpay/x402)
 - [Zcash Protocol](https://z.cash)
 - [CAIP-2 Specification](https://chainagnostic.org/CAIPs/caip-2)

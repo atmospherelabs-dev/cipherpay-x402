@@ -1,6 +1,63 @@
-/**
- * Configuration for the x402 Zcash paywall middleware.
- */
+// ---------------------------------------------------------------------------
+// x402 v2 Protocol Types (aligned with coinbase/x402 spec)
+// ---------------------------------------------------------------------------
+
+const ZATOSHIS_PER_ZEC = 100_000_000;
+
+export function zecToZatoshis(zec: number): string {
+  return Math.round(zec * ZATOSHIS_PER_ZEC).toString();
+}
+
+export function zatoshisToZec(zatoshis: string): number {
+  return parseInt(zatoshis, 10) / ZATOSHIS_PER_ZEC;
+}
+
+// ---------------------------------------------------------------------------
+// Wire protocol types (x402 v2)
+// ---------------------------------------------------------------------------
+
+export interface ResourceInfo {
+  url: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface PaymentRequirements {
+  scheme: string;
+  network: string;
+  asset: string;
+  amount: string;
+  payTo: string;
+  maxTimeoutSeconds: number;
+  extra: Record<string, unknown>;
+}
+
+export interface PaymentRequired {
+  x402Version: 2;
+  resource: ResourceInfo;
+  accepts: PaymentRequirements[];
+  error?: string;
+}
+
+export interface PaymentPayload {
+  x402Version: 2;
+  resource?: ResourceInfo;
+  accepted: PaymentRequirements;
+  payload: {
+    txid: string;
+  };
+}
+
+export interface SettlementResponse {
+  success: boolean;
+  txid: string;
+  network: string;
+}
+
+// ---------------------------------------------------------------------------
+// Developer-facing config
+// ---------------------------------------------------------------------------
+
 export interface PaywallConfig {
   /** ZEC amount to charge per request (e.g. 0.001) */
   amount: number;
@@ -20,51 +77,19 @@ export interface PaywallConfig {
   /** Custom description shown in the 402 response */
   description?: string;
 
+  /** Max seconds to wait for verification. Defaults to 120 */
+  maxTimeoutSeconds?: number;
+
   /**
-   * Optional function to extract a custom amount per request.
-   * If provided, overrides the static `amount` field.
+   * Dynamic pricing — if provided, overrides the static `amount` field.
    */
   getAmount?: (req: GenericRequest) => number | Promise<number>;
 }
 
-/**
- * The 402 Payment Required response body sent to clients.
- * Follows the x402 protocol specification.
- */
-export interface PaymentRequiredResponse {
-  /** x402 protocol version */
-  x402Version: 1;
+// ---------------------------------------------------------------------------
+// CipherPay facilitator verify response
+// ---------------------------------------------------------------------------
 
-  /** Payment options the client can choose from */
-  accepts: PaymentOption[];
-
-  /** Human-readable description */
-  description?: string;
-
-  /** Facilitator info for verification */
-  facilitator: {
-    url: string;
-    network: string;
-  };
-}
-
-export interface PaymentOption {
-  /** Blockchain network (CAIP-2 format) */
-  network: string;
-
-  /** Token identifier */
-  token: string;
-
-  /** Payment amount as string (ZEC) */
-  amount: string;
-
-  /** Recipient address */
-  address: string;
-}
-
-/**
- * CipherPay x402 verify response.
- */
 export interface VerifyResponse {
   valid: boolean;
   received_zec: number;
@@ -73,18 +98,16 @@ export interface VerifyResponse {
   reason?: string;
 }
 
-/**
- * Minimal request interface for framework-agnostic middleware.
- */
+// ---------------------------------------------------------------------------
+// Framework-agnostic request/response
+// ---------------------------------------------------------------------------
+
 export interface GenericRequest {
   method: string;
   url: string;
   headers: Record<string, string | string[] | undefined>;
 }
 
-/**
- * Minimal response interface for framework-agnostic middleware.
- */
 export interface GenericResponse {
   status(code: number): GenericResponse;
   json(body: unknown): void;
