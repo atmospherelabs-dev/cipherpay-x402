@@ -24,7 +24,6 @@ import { zcashPaywall } from '@cipherpay/x402/express';
 
 const app = express();
 
-// Gate premium endpoints behind a ZEC payment
 app.use('/api/premium', zcashPaywall({
   amount: 0.001,          // ZEC per request
   address: 'u1abc...',    // Your Zcash Unified Address
@@ -40,6 +39,8 @@ app.listen(3000);
 
 ## How It Works
 
+x402 v2 protocol flow with Zcash shielded payments:
+
 ```
 Client                          Your API                    CipherPay
   │                               │                            │
@@ -47,15 +48,18 @@ Client                          Your API                    CipherPay
   │──────────────────────────────>│                            │
   │                               │                            │
   │  402 Payment Required         │                            │
-  │  { accepts: [{ token: "ZEC", │                            │
-  │    amount: "0.001",           │                            │
-  │    address: "u1abc..." }] }   │                            │
+  │  PAYMENT-REQUIRED: base64     │                            │
+  │  { accepts: [{ scheme:        │                            │
+  │    "exact", asset: "ZEC",     │                            │
+  │    amount: "100000",          │                            │
+  │    payTo: "u1abc..." }] }     │                            │
   │<──────────────────────────────│                            │
   │                               │                            │
   │  (client sends shielded ZEC)  │                            │
   │                               │                            │
   │  GET /api/premium/data        │                            │
-  │  X-PAYMENT: txid=7f3a9b...   │                            │
+  │  PAYMENT-SIGNATURE: base64    │                            │
+  │  { payload: { txid: "..." } } │                            │
   │──────────────────────────────>│                            │
   │                               │  POST /api/x402/verify     │
   │                               │───────────────────────────>│
@@ -64,16 +68,30 @@ Client                          Your API                    CipherPay
   │                               │<───────────────────────────│
   │                               │                            │
   │  200 OK                       │                            │
-  │  { temperature: 18 }          │                            │
+  │  PAYMENT-RESPONSE: base64     │                            │
   │<──────────────────────────────│                            │
 ```
 
 1. Client requests a paid resource.
-2. Middleware returns `402` with Zcash payment instructions.
+2. Middleware returns `402` with `PAYMENT-REQUIRED` header (base64-encoded `PaymentRequired`).
 3. Client sends shielded ZEC to your address.
-4. Client retries with `X-PAYMENT: txid=<transaction_id>`.
+4. Client retries with `PAYMENT-SIGNATURE` header (base64-encoded `PaymentPayload` containing `txid`).
 5. Middleware verifies via CipherPay's facilitator (trial decryption).
-6. If valid, request proceeds. If not, 402 again.
+6. If valid, `PAYMENT-RESPONSE` header is set and request proceeds.
+
+## x402 v2 Compatibility
+
+This SDK implements the [x402 v2 protocol](https://github.com/coinbase/x402):
+
+| Feature | x402 Standard | @cipherpay/x402 |
+|---------|---------------|-----------------|
+| Version | `x402Version: 2` | Supported |
+| Request header | `PAYMENT-SIGNATURE` | Supported |
+| Response header | `PAYMENT-REQUIRED` | Supported |
+| Settlement header | `PAYMENT-RESPONSE` | Supported |
+| Scheme | `exact` | `exact` on `zcash:mainnet` |
+| Amount format | Smallest denomination | Zatoshis (1 ZEC = 10^8) |
+| Legacy `X-PAYMENT` | — | Backward compatible |
 
 ## Framework-Agnostic Usage
 
@@ -98,9 +116,8 @@ import { zcashPaywall } from '@cipherpay/x402/express';
 app.use('/api/ai', zcashPaywall({
   address: 'u1abc...',
   apiKey: 'cpay_sk_...',
-  amount: 0, // overridden by getAmount
+  amount: 0,
   getAmount: (req) => {
-    // Price by model
     if (req.url.includes('gpt-4')) return 0.01;
     if (req.url.includes('gpt-3')) return 0.001;
     return 0.0005;
@@ -135,27 +152,31 @@ if (result.valid) {
 | `facilitatorUrl` | `string` | No | CipherPay URL (default: `https://api.cipherpay.app`) |
 | `network` | `string` | No | CAIP-2 identifier (default: `zcash:mainnet`) |
 | `description` | `string` | No | Human-readable description in 402 response |
+| `maxTimeoutSeconds` | `number` | No | Verification timeout (default: `120`) |
 | `getAmount` | `function` | No | Dynamic pricing function (overrides `amount`) |
 
 *Required unless `getAmount` is provided.
 
-## 402 Response Format
+## 402 Response Format (x402 v2)
 
 ```json
 {
-  "x402Version": 1,
+  "x402Version": 2,
+  "resource": {
+    "url": "/api/premium/data",
+    "description": "Premium weather data"
+  },
   "accepts": [
     {
+      "scheme": "exact",
       "network": "zcash:mainnet",
-      "token": "ZEC",
-      "amount": "0.00100000",
-      "address": "u1abc..."
+      "asset": "ZEC",
+      "amount": "100000",
+      "payTo": "u1abc...",
+      "maxTimeoutSeconds": 120,
+      "extra": {}
     }
-  ],
-  "facilitator": {
-    "url": "https://api.cipherpay.app",
-    "network": "zcash:mainnet"
-  }
+  ]
 }
 ```
 
@@ -163,9 +184,9 @@ if (result.valid) {
 
 AI agents can pay for x402-gated APIs using a shielded Zcash wallet. The agent:
 
-1. Discovers the 402 response with payment terms.
-2. Sends shielded ZEC to the address.
-3. Retries with the txid.
+1. Receives a 402 response — decodes `PAYMENT-REQUIRED` header.
+2. Sends shielded ZEC to the `payTo` address for the `amount` (in zatoshis).
+3. Retries with `PAYMENT-SIGNATURE` header containing base64-encoded `PaymentPayload`.
 
 Every payment is fully encrypted on the Zcash blockchain. No observer can see what API the agent called, how much it paid, or how often.
 
@@ -184,7 +205,8 @@ Same account works for both e-commerce (invoices, checkout) and x402 (API moneti
 - [x402 Protocol](https://x402.org) — HTTP 402 payment standard
 - [Zcash](https://z.cash) — Private digital currency
 - [Documentation](https://cipherpay.app/docs) — Full API docs
+- [coinbase/x402](https://github.com/coinbase/x402) — Protocol source
 
 ## License
 
-MIT — [Atmosphere Labs](https://atmosphere-labs.com)
+MIT — [Atmosphere Labs](https://github.com/atmospherelabs-dev)
