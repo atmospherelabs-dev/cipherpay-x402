@@ -1,6 +1,6 @@
 {
   "name": "@cipherpay/x402",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Accept private Zcash payments on any API via the x402 protocol. CipherPay is the Zcash facilitator.",
   "type": "module",
   "main": "dist/index.js",
