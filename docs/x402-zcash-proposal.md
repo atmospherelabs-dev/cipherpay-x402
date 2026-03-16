@@ -109,7 +109,7 @@ Client                    Resource Server              CipherPay (Facilitator)
 
 ## Facilitator: CipherPay
 
-**CipherPay** ([cipherpay.app](https://cipherpay.app)) is an open-source, non-custodial Zcash payment processor built by [Atmosphere Labs](https://github.com/atmospherelabs-dev).
+**CipherPay** ([cipherpay.app](https://cipherpay.app)) is an open-source, non-custodial Zcash payment processor built by [Atmosphere Labs](https://atmospherelabs.dev).
 
 - **Verify endpoint**: `POST https://api.cipherpay.app/api/x402/verify`
 - **Auth**: `Authorization: Bearer <api_key>` (merchants register with their UFVK)

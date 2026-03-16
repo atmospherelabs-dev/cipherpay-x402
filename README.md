@@ -209,4 +209,4 @@ Same account works for both e-commerce (invoices, checkout) and x402 (API moneti
 
 ## License
 
-MIT — [Atmosphere Labs](https://github.com/atmospherelabs-dev)
+MIT — [Atmosphere Labs](https://atmospherelabs.dev)
