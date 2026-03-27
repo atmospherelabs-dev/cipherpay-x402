@@ -1,6 +1,6 @@
 # @cipherpay/x402
 
-Accept private Zcash payments on any API via x402 and [MPP](https://www.mppstandard.org/) protocols. One middleware. Fully shielded. No buyer data exposed.
+Accept private Zcash payments on any API via x402 and [MPP](https://mpp.dev) protocols. One middleware. Fully shielded. No buyer data exposed.
 
 CipherPay is the **Zcash facilitator** for agentic payments — the only way to accept shielded ZEC in the HTTP 402 flow.
 
