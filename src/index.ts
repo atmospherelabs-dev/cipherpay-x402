@@ -9,6 +9,8 @@ export type {
   SettlementResponse,
   ResourceInfo,
   VerifyResponse,
+  MppCharge,
+  MppCredential,
   GenericRequest,
   GenericResponse,
 } from './types.js';

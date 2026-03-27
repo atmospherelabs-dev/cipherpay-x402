@@ -1,7 +1,7 @@
 {
   "name": "@cipherpay/x402",
-  "version": "0.2.1",
-  "description": "Accept private Zcash payments on any API via the x402 protocol. CipherPay is the Zcash facilitator.",
+  "version": "0.3.0",
+  "description": "Accept private Zcash payments on any API via x402 and MPP protocols. CipherPay is the Zcash facilitator.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -36,6 +36,8 @@
     "facilitator",
     "shielded",
     "http-402",
+    "mpp",
+    "machine-payments",
     "cipherpay"
   ],
   "author": "Atmosphere Labs",

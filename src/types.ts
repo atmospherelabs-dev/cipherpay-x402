@@ -81,9 +81,37 @@ export interface PaywallConfig {
   maxTimeoutSeconds?: number;
 
   /**
+   * Which payment protocol(s) to advertise in 402 responses.
+   * - "x402": x402 JSON body + PAYMENT-SIGNATURE header (default)
+   * - "mpp": WWW-Authenticate: Payment header + Authorization: Payment credential
+   * - "both": advertise both protocols simultaneously
+   *
+   * Incoming credentials are always accepted from either protocol regardless
+   * of this setting.
+   */
+  protocol?: 'x402' | 'mpp' | 'both';
+
+  /**
    * Dynamic pricing — if provided, overrides the static `amount` field.
    */
   getAmount?: (req: GenericRequest) => number | Promise<number>;
+}
+
+// ---------------------------------------------------------------------------
+// MPP (Machine Payments Protocol) types
+// ---------------------------------------------------------------------------
+
+export interface MppCharge {
+  amount: string;
+  currency: string;
+  recipient?: string;
+  description?: string;
+}
+
+export interface MppCredential {
+  id: string;
+  method: string;
+  payload: { txid: string };
 }
 
 // ---------------------------------------------------------------------------
