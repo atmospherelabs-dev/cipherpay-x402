@@ -1,5 +1,5 @@
 export { createPaywall } from './middleware.js';
-export { verifyPayment } from './client.js';
+export { verifyPayment, validateSession } from './client.js';
 export { zecToZatoshis, zatoshisToZec } from './types.js';
 export type {
   PaywallConfig,
@@ -9,6 +9,7 @@ export type {
   SettlementResponse,
   ResourceInfo,
   VerifyResponse,
+  SessionValidateResponse,
   MppCharge,
   MppCredential,
   GenericRequest,

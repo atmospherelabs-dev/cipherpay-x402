@@ -133,6 +133,14 @@ export interface VerifyResponse {
   reason?: string;
 }
 
+export interface SessionValidateResponse {
+  valid: boolean;
+  session_id?: string;
+  balance_remaining?: number;
+  requests_made?: number;
+  reason?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Framework-agnostic request/response
 // ---------------------------------------------------------------------------

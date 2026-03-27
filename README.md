@@ -1,8 +1,8 @@
 # @cipherpay/x402
 
-Accept private Zcash payments on any API via the [x402 protocol](https://x402.org). One middleware. Fully shielded. No buyer data exposed.
+Accept private Zcash payments on any API via x402 and [MPP](https://www.mppstandard.org/) protocols. One middleware. Fully shielded. No buyer data exposed.
 
-CipherPay is the **Zcash facilitator** for x402 — the only way to accept shielded ZEC payments in the HTTP 402 flow.
+CipherPay is the **Zcash facilitator** for agentic payments — the only way to accept shielded ZEC in the HTTP 402 flow.
 
 ## Why
 
@@ -37,61 +37,89 @@ app.get('/api/premium/data', (req, res) => {
 app.listen(3000);
 ```
 
+## Protocol Support
+
+The middleware supports **three payment methods** — all handled transparently:
+
+| Method | Header | Use case |
+|--------|--------|----------|
+| x402 | `PAYMENT-SIGNATURE` | Standard x402 per-request payments |
+| MPP | `Authorization: Payment` | Machine Payments Protocol |
+| Sessions | `Authorization: Bearer cps_...` | Prepaid credit — pay once, use many times |
+
+By default, the middleware advertises **both** x402 and MPP challenge formats in 402 responses and accepts credentials from either protocol. Sessions are always accepted when a valid bearer token is present.
+
 ## How It Works
 
-x402 v2 protocol flow with Zcash shielded payments:
-
 ```
-Client                          Your API                    CipherPay
+Agent                           Your API                    CipherPay
   │                               │                            │
   │  GET /api/premium/data        │                            │
   │──────────────────────────────>│                            │
   │                               │                            │
   │  402 Payment Required         │                            │
-  │  PAYMENT-REQUIRED: base64     │                            │
-  │  { accepts: [{ scheme:        │                            │
-  │    "exact", asset: "ZEC",     │                            │
-  │    amount: "100000",          │                            │
-  │    payTo: "u1abc..." }] }     │                            │
+  │  PAYMENT-REQUIRED: base64     │  (x402 challenge)          │
+  │  WWW-Authenticate: Payment    │  (MPP challenge)           │
   │<──────────────────────────────│                            │
   │                               │                            │
-  │  (client sends shielded ZEC)  │                            │
+  │  (agent sends shielded ZEC)   │                            │
   │                               │                            │
   │  GET /api/premium/data        │                            │
-  │  PAYMENT-SIGNATURE: base64    │                            │
-  │  { payload: { txid: "..." } } │                            │
+  │  Authorization: Payment ...   │  (or PAYMENT-SIGNATURE)    │
   │──────────────────────────────>│                            │
   │                               │  POST /api/x402/verify     │
   │                               │───────────────────────────>│
-  │                               │                            │
   │                               │  { valid: true }           │
   │                               │<───────────────────────────│
   │                               │                            │
   │  200 OK                       │                            │
-  │  PAYMENT-RESPONSE: base64     │                            │
   │<──────────────────────────────│                            │
 ```
 
-1. Client requests a paid resource.
-2. Middleware returns `402` with `PAYMENT-REQUIRED` header (base64-encoded `PaymentRequired`).
-3. Client sends shielded ZEC to your address.
-4. Client retries with `PAYMENT-SIGNATURE` header (base64-encoded `PaymentPayload` containing `txid`).
-5. Middleware verifies via CipherPay's facilitator (trial decryption).
-6. If valid, `PAYMENT-RESPONSE` header is set and request proceeds.
+### Session flow (prepaid credit)
 
-## x402 v2 Compatibility
+```
+Agent                           Your API                    CipherPay
+  │                               │                            │
+  │  POST /api/sessions/open      │                            │
+  │  { txid, merchant_id }        │───────────────────────────>│
+  │                               │  { bearer_token: cps_... } │
+  │<──────────────────────────────│<───────────────────────────│
+  │                               │                            │
+  │  GET /api/premium/data        │                            │
+  │  Authorization: Bearer cps_.. │                            │
+  │──────────────────────────────>│  GET /sessions/validate    │
+  │                               │───────────────────────────>│
+  │                               │  { valid, balance }        │
+  │  200 OK                       │<───────────────────────────│
+  │  X-Session-Balance: 49000     │                            │
+  │<──────────────────────────────│                            │
+```
 
-This SDK implements the [x402 v2 protocol](https://github.com/coinbase/x402):
+## Replay Protection
 
-| Feature | x402 Standard | @cipherpay/x402 |
-|---------|---------------|-----------------|
-| Version | `x402Version: 2` | Supported |
-| Request header | `PAYMENT-SIGNATURE` | Supported |
-| Response header | `PAYMENT-REQUIRED` | Supported |
-| Settlement header | `PAYMENT-RESPONSE` | Supported |
-| Scheme | `exact` | `exact` on `zcash:mainnet` |
-| Amount format | Smallest denomination | Zatoshis (1 ZEC = 10^8) |
-| Legacy `X-PAYMENT` | — | Backward compatible |
+By default, the middleware rejects transactions that have already been verified. A replayed txid returns `402` with `"error": "payment_replayed"`.
+
+```typescript
+app.use('/api/premium', zcashPaywall({
+  amount: 0.001,
+  address: 'u1abc...',
+  apiKey: 'cpay_sk_...',
+  rejectReplays: true,      // default — each txid works once
+}));
+```
+
+Set `rejectReplays: false` for endpoints where the same transaction should grant repeated access (e.g., downloading a file multiple times after purchase).
+
+## Protocol Compatibility
+
+| Feature | x402 | MPP | Sessions |
+|---------|------|-----|----------|
+| Challenge header | `PAYMENT-REQUIRED` | `WWW-Authenticate: Payment` | — |
+| Credential header | `PAYMENT-SIGNATURE` | `Authorization: Payment` | `Authorization: Bearer cps_...` |
+| Settlement header | `PAYMENT-RESPONSE` | `Payment-Receipt` | `X-Session-Balance` |
+| Replay protection | Yes | Yes | N/A (balance-based) |
+| Per-request cost | Full amount | Full amount | `cost_per_request` from session |
 
 ## Framework-Agnostic Usage
 
@@ -154,6 +182,8 @@ if (result.valid) {
 | `description` | `string` | No | Human-readable description in 402 response |
 | `maxTimeoutSeconds` | `number` | No | Verification timeout (default: `120`) |
 | `getAmount` | `function` | No | Dynamic pricing function (overrides `amount`) |
+| `protocol` | `'x402' \| 'mpp' \| 'both'` | No | Which challenge format(s) to advertise (default: `'both'`) |
+| `rejectReplays` | `boolean` | No | Reject previously-verified txids (default: `true`) |
 
 *Required unless `getAmount` is provided.
 
@@ -182,11 +212,11 @@ if (result.valid) {
 
 ## For AI Agent Developers
 
-AI agents can pay for x402-gated APIs using a shielded Zcash wallet. The agent:
+AI agents can pay for gated APIs using a shielded Zcash wallet. Three options:
 
-1. Receives a 402 response — decodes `PAYMENT-REQUIRED` header.
-2. Sends shielded ZEC to the `payTo` address for the `amount` (in zatoshis).
-3. Retries with `PAYMENT-SIGNATURE` header containing base64-encoded `PaymentPayload`.
+**Per-request (x402 or MPP):** Agent receives a 402, sends shielded ZEC, retries with the txid. Simple, one payment per request.
+
+**Sessions (prepaid credit):** Agent sends a deposit transaction, receives a bearer token (`cps_...`), and uses it for subsequent requests. Balance is deducted automatically. Best for high-frequency API usage.
 
 Every payment is fully encrypted on the Zcash blockchain. No observer can see what API the agent called, how much it paid, or how often.
 
