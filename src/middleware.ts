@@ -134,6 +134,7 @@ export function createPaywall(config: PaywallConfig) {
   if (!config.amount && !config.getAmount) throw new Error('@cipherpay/x402: amount or getAmount is required');
 
   const advertise = config.protocol ?? 'both';
+  const rejectReplays = config.rejectReplays ?? true;
 
   return async function paywall(
     req: GenericRequest,
@@ -168,9 +169,10 @@ export function createPaywall(config: PaywallConfig) {
         amount,
         config.apiKey,
         config.facilitatorUrl,
+        payment.protocol,
       );
 
-      if (result.valid) {
+      if (result.valid && !(rejectReplays && result.previously_verified)) {
         const settlement: SettlementResponse = {
           success: true,
           txid: payment.txid,
@@ -185,6 +187,7 @@ export function createPaywall(config: PaywallConfig) {
 
         await next();
       } else {
+        const isReplay = result.valid && result.previously_verified;
         const body = buildPaymentRequired(config, amount, req.url);
         res.setHeader('Content-Type', 'application/json');
 
@@ -196,8 +199,10 @@ export function createPaywall(config: PaywallConfig) {
         }
 
         res.status(402).json({
-          error: 'payment_invalid',
-          reason: result.reason ?? 'Payment verification failed',
+          error: isReplay ? 'payment_replayed' : 'payment_invalid',
+          reason: isReplay
+            ? 'This transaction has already been used. Send a new payment.'
+            : (result.reason ?? 'Payment verification failed'),
           ...body,
         });
       }

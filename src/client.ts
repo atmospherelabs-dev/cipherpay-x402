@@ -11,6 +11,7 @@ export async function verifyPayment(
   expectedAmountZec: number,
   apiKey: string,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
+  protocol?: string,
 ): Promise<VerifyResponse> {
   const url = `${facilitatorUrl.replace(/\/$/, '')}/api/x402/verify`;
 
@@ -27,6 +28,7 @@ export async function verifyPayment(
       body: JSON.stringify({
         txid,
         expected_amount_zec: expectedAmountZec,
+        ...(protocol ? { protocol } : {}),
       }),
       signal: controller.signal,
     });

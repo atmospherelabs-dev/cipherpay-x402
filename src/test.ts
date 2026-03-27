@@ -133,6 +133,71 @@ describe('credential parsing', () => {
     console.log(`  x402 credential parsed, response status: ${res._status}`);
   });
 
+  it('rejects replayed txid by default', async () => {
+    const fakeTxid = 'c'.repeat(64);
+    const cred: MppCredential = {
+      id: 'replay-test',
+      method: 'zcash',
+      payload: { txid: fakeTxid },
+    };
+    const b64 = Buffer.from(JSON.stringify(cred)).toString('base64url');
+
+    // Mock a verify response where previously_verified = true
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      valid: true,
+      received_zec: 0.001,
+      received_zatoshis: 100000,
+      previously_verified: true,
+      reason: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { Authorization: `Payment ${b64}` });
+      const res = makeRes();
+      await handler(req, res, () => {});
+
+      assert.equal(res._status, 402, 'replayed tx should return 402');
+      assert.equal(res._body?.error, 'payment_replayed');
+      console.log('  replay rejected correctly');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('allows replayed txid when rejectReplays=false', async () => {
+    const fakeTxid = 'd'.repeat(64);
+    const cred: MppCredential = {
+      id: 'replay-allow',
+      method: 'zcash',
+      payload: { txid: fakeTxid },
+    };
+    const b64 = Buffer.from(JSON.stringify(cred)).toString('base64url');
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      valid: true,
+      received_zec: 0.001,
+      received_zatoshis: 100000,
+      previously_verified: true,
+      reason: null,
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      const handler = createPaywall({ ...CONFIG, rejectReplays: false });
+      const req = makeReq('/api/test', { Authorization: `Payment ${b64}` });
+      const res = makeRes();
+      let nextCalled = false;
+      await handler(req, res, () => { nextCalled = true; });
+
+      assert.ok(nextCalled, 'next() should be called — replay allowed');
+      console.log('  replay allowed with rejectReplays=false');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('rejects malformed Authorization header gracefully', async () => {
     const handler = createPaywall(CONFIG);
     const req = makeReq('/api/test', { Authorization: 'Bearer some-jwt-token' });

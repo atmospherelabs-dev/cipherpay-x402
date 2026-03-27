@@ -92,6 +92,13 @@ export interface PaywallConfig {
   protocol?: 'x402' | 'mpp' | 'both';
 
   /**
+   * Reject payments that have already been verified (replay protection).
+   * Defaults to true. Set to false for idempotent retry patterns or
+   * session-based access where one payment covers multiple requests.
+   */
+  rejectReplays?: boolean;
+
+  /**
    * Dynamic pricing — if provided, overrides the static `amount` field.
    */
   getAmount?: (req: GenericRequest) => number | Promise<number>;
