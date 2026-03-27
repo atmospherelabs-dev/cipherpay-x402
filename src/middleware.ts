@@ -8,7 +8,7 @@ import type {
   GenericResponse,
 } from './types.js';
 import { zecToZatoshis } from './types.js';
-import { verifyPayment } from './client.js';
+import { verifyPayment, validateSession } from './client.js';
 
 const HEADER_PAYMENT_SIGNATURE = 'payment-signature';
 const HEADER_PAYMENT_REQUIRED = 'payment-required';
@@ -24,6 +24,19 @@ function normalizeHeaders(headers: Record<string, string | string[] | undefined>
     if (v) out[key.toLowerCase()] = v;
   }
   return out;
+}
+
+/**
+ * Extract a session bearer token from Authorization: Bearer cps_...
+ */
+function extractSessionToken(headers: Record<string, string | string[] | undefined>): string | null {
+  const h = normalizeHeaders(headers);
+  const authHeader = h[HEADER_AUTHORIZATION];
+  if (authHeader) {
+    const match = authHeader.match(/^Bearer\s+(cps_.+)$/i);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 /**
@@ -144,6 +157,20 @@ export function createPaywall(config: PaywallConfig) {
     const amount = config.getAmount
       ? await config.getAmount(req)
       : config.amount;
+
+    // Session bearer tokens take priority — instant, no per-tx verification
+    const sessionToken = extractSessionToken(req.headers);
+    if (sessionToken) {
+      try {
+        const session = await validateSession(sessionToken, config.apiKey, config.facilitatorUrl);
+        if (session.valid) {
+          res.setHeader('X-Session-Balance', String(session.balance_remaining));
+          res.setHeader('X-Session-Id', session.session_id ?? '');
+          await next();
+          return;
+        }
+      } catch { /* fall through to payment check */ }
+    }
 
     const payment = extractPayment(req.headers);
 

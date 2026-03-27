@@ -1,4 +1,4 @@
-import type { VerifyResponse } from './types.js';
+import type { VerifyResponse, SessionValidateResponse } from './types.js';
 
 const DEFAULT_FACILITATOR_URL = 'https://api.cipherpay.app';
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -39,6 +39,38 @@ export async function verifyPayment(
     }
 
     return await res.json() as VerifyResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const SESSION_TIMEOUT_MS = 5_000;
+
+/**
+ * Validate a session bearer token and deduct one request from the balance.
+ */
+export async function validateSession(
+  token: string,
+  apiKey: string,
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<SessionValidateResponse> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/validate?token=${encodeURIComponent(token)}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      return { valid: false };
+    }
+
+    return await res.json() as SessionValidateResponse;
   } finally {
     clearTimeout(timeout);
   }
