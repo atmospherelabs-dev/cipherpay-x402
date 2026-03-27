@@ -169,7 +169,15 @@ export function createPaywall(config: PaywallConfig) {
           await next();
           return;
         }
-      } catch { /* fall through to payment check */ }
+        // Session token recognized but invalid/expired/depleted — require new payment
+      } catch {
+        res.setHeader('Content-Type', 'application/json');
+        res.status(503).json({
+          error: 'session_validation_unavailable',
+          message: 'Session validation service is temporarily unavailable. Try again shortly.',
+        });
+        return;
+      }
     }
 
     const payment = extractPayment(req.headers);

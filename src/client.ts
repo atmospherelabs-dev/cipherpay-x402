@@ -48,13 +48,14 @@ const SESSION_TIMEOUT_MS = 5_000;
 
 /**
  * Validate a session bearer token and deduct one request from the balance.
+ * Token is sent via Authorization header (not query string) to avoid URL logging.
  */
 export async function validateSession(
   token: string,
-  apiKey: string,
+  _apiKey: string,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
 ): Promise<SessionValidateResponse> {
-  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/validate?token=${encodeURIComponent(token)}`;
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/validate`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
@@ -62,7 +63,7 @@ export async function validateSession(
   try {
     const res = await fetch(url, {
       method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiKey}` },
+      headers: { 'Authorization': `Bearer ${token}` },
       signal: controller.signal,
     });
 
