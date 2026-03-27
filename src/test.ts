@@ -207,3 +207,118 @@ describe('credential parsing', () => {
     assert.equal(res._status, 402, 'Bearer token should not match — return 402');
   });
 });
+
+describe('session bearer tokens', () => {
+  it('valid session token proceeds with balance headers', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      assert.ok(url.includes('/api/sessions/validate'), 'should call validate endpoint');
+      return new Response(JSON.stringify({
+        valid: true,
+        session_id: 'sess-123',
+        balance_remaining: 49000,
+        requests_made: 1,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { Authorization: 'Bearer cps_abc123def456' });
+      const res = makeRes();
+      let nextCalled = false;
+      await handler(req, res, () => { nextCalled = true; });
+
+      assert.ok(nextCalled, 'next() should be called for valid session');
+      assert.equal(res._headers['x-session-balance'], '49000', 'should set balance header');
+      assert.equal(res._headers['x-session-id'], 'sess-123', 'should set session ID header');
+      console.log('  valid session token OK');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('invalid session falls through to 402 payment challenge', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => {
+      return new Response(JSON.stringify({
+        valid: false,
+        reason: 'Session expired',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { Authorization: 'Bearer cps_expired_token' });
+      const res = makeRes();
+      await handler(req, res, () => {});
+
+      assert.equal(res._status, 402, 'expired session should return 402');
+      assert.ok(res._headers['payment-required'], 'should include payment challenge');
+      console.log('  invalid session falls through to 402');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('returns 503 when session validation service is unreachable', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => { throw new Error('ECONNREFUSED'); };
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { Authorization: 'Bearer cps_valid_but_unreachable' });
+      const res = makeRes();
+      await handler(req, res, () => {});
+
+      assert.equal(res._status, 503, 'should return 503 on service failure');
+      assert.equal(res._body?.error, 'session_validation_unavailable');
+      console.log('  503 on validation failure OK');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('non-cps Bearer token is ignored (falls to 402)', async () => {
+    const handler = createPaywall(CONFIG);
+    const req = makeReq('/api/test', { Authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9' });
+    const res = makeRes();
+    await handler(req, res, () => {});
+
+    assert.equal(res._status, 402, 'JWT-style token should not trigger session flow');
+    console.log('  non-cps Bearer ignored correctly');
+  });
+
+  it('session token takes priority over payment credential', async () => {
+    const originalFetch = globalThis.fetch;
+    let calledEndpoint = '';
+    globalThis.fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      calledEndpoint = url;
+      return new Response(JSON.stringify({
+        valid: true,
+        session_id: 'sess-priority',
+        balance_remaining: 30000,
+        requests_made: 5,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const handler = createPaywall(CONFIG);
+      // Send both a session token AND a payment signature
+      const req = makeReq('/api/test', {
+        Authorization: 'Bearer cps_priority_token',
+        'PAYMENT-SIGNATURE': Buffer.from(JSON.stringify({ payload: { txid: 'a'.repeat(64) } })).toString('base64'),
+      });
+      const res = makeRes();
+      let nextCalled = false;
+      await handler(req, res, () => { nextCalled = true; });
+
+      assert.ok(nextCalled, 'next() should be called via session path');
+      assert.ok(calledEndpoint.includes('/sessions/validate'), 'should hit session endpoint, not verify');
+      console.log('  session token takes priority over payment credential');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
