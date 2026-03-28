@@ -36,6 +36,7 @@ export interface PaymentRequired {
   x402Version: 2;
   resource: ResourceInfo;
   accepts: PaymentRequirements[];
+  validUntil?: string;
   error?: string;
 }
 
@@ -102,6 +103,12 @@ export interface PaywallConfig {
    * Dynamic pricing — if provided, overrides the static `amount` field.
    */
   getAmount?: (req: GenericRequest) => number | Promise<number>;
+
+  /**
+   * How long a 402 challenge remains valid (in seconds). Defaults to 300 (5 minutes).
+   * After this, agents should request a fresh challenge to get current pricing.
+   */
+  challengeTimeoutSeconds?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +146,37 @@ export interface SessionValidateResponse {
   balance_remaining?: number;
   requests_made?: number;
   reason?: string;
+}
+
+export interface SessionDeductResponse {
+  valid: boolean;
+  session_id?: string;
+  balance_remaining?: number;
+  deducted?: number;
+  reason?: string;
+}
+
+export interface SessionPrepareResponse {
+  session_request_id: string;
+  deposit_address: string;
+  merchant_id: string;
+  min_deposit_zatoshis: number;
+  expires_in_seconds: number;
+}
+
+export interface WellKnownPayment {
+  version: string;
+  methods: string[];
+  currencies: string[];
+  network: string;
+  protocols: string[];
+  capabilities: {
+    sessions: boolean;
+    streaming: boolean;
+    replay_protection: boolean;
+  };
+  facilitator: string;
+  documentation: string;
 }
 
 // ---------------------------------------------------------------------------
