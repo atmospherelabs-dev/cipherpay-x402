@@ -1,4 +1,4 @@
-import type { VerifyResponse, SessionValidateResponse } from './types.js';
+import type { VerifyResponse, SessionValidateResponse, SessionDeductResponse, SessionPrepareResponse } from './types.js';
 
 const DEFAULT_FACILITATOR_URL = 'https://api.cipherpay.app';
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -72,6 +72,71 @@ export async function validateSession(
     }
 
     return await res.json() as SessionValidateResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Deduct a variable amount from a session (for streaming metering).
+ */
+export async function deductSession(
+  token: string,
+  amountZatoshis: number,
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<SessionDeductResponse> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/deduct`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ amount_zatoshis: amountZatoshis }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      return { valid: false };
+    }
+
+    return await res.json() as SessionDeductResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Prepare a session deposit: get a unique payment address (no memo needed).
+ */
+export async function prepareSession(
+  merchantId: string,
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<SessionPrepareResponse> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/prepare`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ merchant_id: merchantId }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`Session prepare failed (${res.status}): ${text}`);
+    }
+
+    return await res.json() as SessionPrepareResponse;
   } finally {
     clearTimeout(timeout);
   }

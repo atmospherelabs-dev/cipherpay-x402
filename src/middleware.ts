@@ -96,6 +96,8 @@ function extractPayment(headers: Record<string, string | string[] | undefined>):
 
 function buildPaymentRequired(config: PaywallConfig, amount: number, resourceUrl: string): PaymentRequired {
   const network = config.network ?? 'zcash:mainnet';
+  const timeoutSec = config.challengeTimeoutSeconds ?? 300;
+  const validUntil = new Date(Date.now() + timeoutSec * 1000).toISOString();
   return {
     x402Version: 2,
     resource: { url: resourceUrl, description: config.description },
@@ -108,6 +110,7 @@ function buildPaymentRequired(config: PaywallConfig, amount: number, resourceUrl
       maxTimeoutSeconds: config.maxTimeoutSeconds ?? 120,
       extra: {},
     }],
+    validUntil,
   };
 }
 
@@ -116,16 +119,19 @@ function buildPaymentRequired(config: PaywallConfig, amount: number, resourceUrl
  */
 function buildMppChallenge(config: PaywallConfig, amount: number, resourceUrl: string): string {
   const network = config.network ?? 'zcash:mainnet';
+  const timeoutSec = config.challengeTimeoutSeconds ?? 300;
+  const validUntil = new Date(Date.now() + timeoutSec * 1000).toISOString();
   const charge = {
     amount: zecToZatoshis(amount),
     currency: 'ZEC',
     recipient: config.address,
     description: config.description ?? resourceUrl,
+    valid_until: validUntil,
   };
   const requestB64 = Buffer.from(JSON.stringify(charge)).toString('base64url');
   const id = Buffer.from(resourceUrl).toString('base64url').slice(0, 32);
 
-  return `Payment id="${id}", realm="${network}", method="zcash", intent="charge", request="${requestB64}"`;
+  return `Payment id="${id}", realm="${network}", method="zcash", intent="charge", request="${requestB64}", valid_until="${validUntil}"`;
 }
 
 function toBase64(obj: unknown): string {
