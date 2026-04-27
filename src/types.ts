@@ -32,12 +32,17 @@ export interface PaymentRequirements {
   extra: Record<string, unknown>;
 }
 
+export interface Extensions {
+  [key: string]: { info: unknown; schema: unknown };
+}
+
 export interface PaymentRequired {
   x402Version: 2;
   resource: ResourceInfo;
   accepts: PaymentRequirements[];
   validUntil?: string;
   error?: string;
+  extensions?: Extensions;
 }
 
 export interface PaymentPayload {
@@ -47,12 +52,17 @@ export interface PaymentPayload {
   payload: {
     txid: string;
   };
+  extensions?: Extensions;
 }
 
 export interface SettlementResponse {
   success: boolean;
-  txid: string;
+  transaction: string;
   network: string;
+  payer?: string;
+  errorReason?: string;
+  amount?: string;
+  extensions?: Extensions;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,6 +119,14 @@ export interface PaywallConfig {
    * After this, agents should request a fresh challenge to get current pricing.
    */
   challengeTimeoutSeconds?: number;
+
+  /**
+   * Facilitator API version to use for payment verification.
+   * - 1: Legacy CipherPay format ({ txid, expected_amount_zec })
+   * - 2: x402 V2 spec format ({ x402Version, paymentPayload, paymentRequirements })
+   * Defaults to 2.
+   */
+  facilitatorVersion?: 1 | 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +147,7 @@ export interface MppCredential {
 }
 
 // ---------------------------------------------------------------------------
-// CipherPay facilitator verify response
+// CipherPay facilitator verify response (v1 compat)
 // ---------------------------------------------------------------------------
 
 export interface VerifyResponse {
@@ -138,6 +156,38 @@ export interface VerifyResponse {
   received_zatoshis: number;
   previously_verified: boolean;
   reason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// x402 V2 spec-compliant facilitator response types
+// ---------------------------------------------------------------------------
+
+export interface VerifyResponseV2 {
+  isValid: boolean;
+  invalidReason?: string;
+  payer?: string;
+}
+
+export interface SettleResponseV2 {
+  success: boolean;
+  transaction: string;
+  network: string;
+  payer?: string;
+  errorReason?: string;
+  amount?: string;
+}
+
+export interface SupportedKind {
+  x402Version: number;
+  scheme: string;
+  network: string;
+  extra?: Record<string, unknown>;
+}
+
+export interface SupportedResponse {
+  kinds: SupportedKind[];
+  extensions: string[];
+  signers: Record<string, string[]>;
 }
 
 export interface SessionValidateResponse {

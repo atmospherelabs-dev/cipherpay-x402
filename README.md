@@ -67,9 +67,9 @@ Agent                           Your API                    CipherPay
   │  GET /api/premium/data        │                            │
   │  Authorization: Payment ...   │  (or PAYMENT-SIGNATURE)    │
   │──────────────────────────────>│                            │
-  │                               │  POST /api/x402/verify     │
+  │                               │  POST /api/x402/v2/verify  │
   │                               │───────────────────────────>│
-  │                               │  { valid: true }           │
+  │                               │  { isValid: true }         │
   │                               │<───────────────────────────│
   │                               │                            │
   │  200 OK                       │                            │
@@ -156,6 +156,29 @@ app.use('/api/ai', zcashPaywall({
 
 ## Standalone Verification
 
+### V2 (recommended)
+
+```typescript
+import { verifyPaymentV2, getSupported } from '@cipherpay/x402';
+
+// Check facilitator capabilities
+const supported = await getSupported();
+console.log(supported.kinds); // [{ x402Version: 2, scheme: 'exact', network: 'zcash:mainnet' }]
+
+// Verify a payment (x402 V2 spec format)
+const result = await verifyPaymentV2(
+  paymentPayload,        // PaymentPayload from PAYMENT-SIGNATURE header
+  paymentRequirements,   // PaymentRequirements from your 402 challenge
+  'cpay_sk_...',         // CipherPay API key
+);
+
+if (result.isValid) {
+  console.log('Payment verified');
+}
+```
+
+### V1 (legacy)
+
 ```typescript
 import { verifyPayment } from '@cipherpay/x402';
 
@@ -184,6 +207,7 @@ if (result.valid) {
 | `getAmount` | `function` | No | Dynamic pricing function (overrides `amount`) |
 | `protocol` | `'x402' \| 'mpp' \| 'both'` | No | Which challenge format(s) to advertise (default: `'both'`) |
 | `rejectReplays` | `boolean` | No | Reject previously-verified txids (default: `true`) |
+| `facilitatorVersion` | `1 \| 2` | No | Facilitator API version (default: `2`) |
 
 *Required unless `getAmount` is provided.
 

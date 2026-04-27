@@ -133,7 +133,7 @@ describe('credential parsing', () => {
     console.log(`  x402 credential parsed, response status: ${res._status}`);
   });
 
-  it('rejects replayed txid by default', async () => {
+  it('rejects replayed txid by default (v1 facilitator)', async () => {
     const fakeTxid = 'c'.repeat(64);
     const cred: MppCredential = {
       id: 'replay-test',
@@ -142,7 +142,6 @@ describe('credential parsing', () => {
     };
     const b64 = Buffer.from(JSON.stringify(cred)).toString('base64url');
 
-    // Mock a verify response where previously_verified = true
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(JSON.stringify({
       valid: true,
@@ -153,7 +152,7 @@ describe('credential parsing', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
     try {
-      const handler = createPaywall(CONFIG);
+      const handler = createPaywall({ ...CONFIG, facilitatorVersion: 1 });
       const req = makeReq('/api/test', { Authorization: `Payment ${b64}` });
       const res = makeRes();
       await handler(req, res, () => {});
@@ -166,7 +165,7 @@ describe('credential parsing', () => {
     }
   });
 
-  it('allows replayed txid when rejectReplays=false', async () => {
+  it('allows replayed txid when rejectReplays=false (v1 facilitator)', async () => {
     const fakeTxid = 'd'.repeat(64);
     const cred: MppCredential = {
       id: 'replay-allow',
@@ -185,7 +184,7 @@ describe('credential parsing', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
     try {
-      const handler = createPaywall({ ...CONFIG, rejectReplays: false });
+      const handler = createPaywall({ ...CONFIG, rejectReplays: false, facilitatorVersion: 1 });
       const req = makeReq('/api/test', { Authorization: `Payment ${b64}` });
       const res = makeRes();
       let nextCalled = false;
@@ -317,6 +316,111 @@ describe('session bearer tokens', () => {
       assert.ok(nextCalled, 'next() should be called via session path');
       assert.ok(calledEndpoint.includes('/sessions/validate'), 'should hit session endpoint, not verify');
       console.log('  session token takes priority over payment credential');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('V2 facilitator format', () => {
+  it('sends V2 format to /api/x402/v2/verify by default', async () => {
+    const fakeTxid = 'e'.repeat(64);
+    const payload = { payload: { txid: fakeTxid } };
+    const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = '';
+    let capturedBody: any = null;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      capturedUrl = url;
+      if (init?.body) capturedBody = JSON.parse(init.body as string);
+      return new Response(JSON.stringify({
+        isValid: true,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { 'PAYMENT-SIGNATURE': b64 });
+      const res = makeRes();
+      let nextCalled = false;
+      await handler(req, res, () => { nextCalled = true; });
+
+      assert.ok(nextCalled, 'next() should be called for valid V2 payment');
+      assert.ok(capturedUrl.includes('/api/x402/v2/verify'), 'should call V2 verify endpoint');
+      assert.equal(capturedBody?.x402Version, 2, 'should send x402Version: 2');
+      assert.ok(capturedBody?.paymentPayload, 'should include paymentPayload');
+      assert.ok(capturedBody?.paymentRequirements, 'should include paymentRequirements');
+      assert.equal(capturedBody?.paymentPayload?.payload?.txid, fakeTxid, 'txid should match');
+
+      const settlementHeader = res._headers['payment-response'];
+      assert.ok(settlementHeader, 'should set payment-response header');
+      const settlement = JSON.parse(Buffer.from(settlementHeader, 'base64').toString());
+      assert.equal(settlement.transaction, fakeTxid, 'settlement should use "transaction" field');
+      assert.equal(settlement.success, true);
+      console.log('  V2 facilitator format OK');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('rejects invalid payment via V2 facilitator', async () => {
+    const fakeTxid = 'f'.repeat(64);
+    const payload = { payload: { txid: fakeTxid } };
+    const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(JSON.stringify({
+      isValid: false,
+      invalidReason: 'insufficient_funds',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+
+    try {
+      const handler = createPaywall(CONFIG);
+      const req = makeReq('/api/test', { 'PAYMENT-SIGNATURE': b64 });
+      const res = makeRes();
+      await handler(req, res, () => {});
+
+      assert.equal(res._status, 402, 'invalid V2 payment should return 402');
+      assert.equal(res._body?.error, 'payment_invalid');
+      assert.ok(res._body?.reason?.includes('insufficient_funds'), 'should include V2 reason');
+      console.log('  V2 rejection OK');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('falls back to v1 facilitator when configured', async () => {
+    const fakeTxid = 'a'.repeat(64);
+    const payload = { payload: { txid: fakeTxid } };
+    const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = '';
+    globalThis.fetch = async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      capturedUrl = url;
+      return new Response(JSON.stringify({
+        valid: true,
+        received_zec: 0.001,
+        received_zatoshis: 100000,
+        previously_verified: false,
+        reason: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    try {
+      const handler = createPaywall({ ...CONFIG, facilitatorVersion: 1 });
+      const req = makeReq('/api/test', { 'PAYMENT-SIGNATURE': b64 });
+      const res = makeRes();
+      let nextCalled = false;
+      await handler(req, res, () => { nextCalled = true; });
+
+      assert.ok(nextCalled, 'next() should be called for valid v1 payment');
+      assert.ok(capturedUrl.includes('/api/x402/verify'), 'should call v1 verify endpoint');
+      assert.ok(!capturedUrl.includes('/v2/'), 'should NOT call V2 endpoint');
+      console.log('  v1 facilitator fallback OK');
     } finally {
       globalThis.fetch = originalFetch;
     }

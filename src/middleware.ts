@@ -2,13 +2,14 @@ import type {
   PaywallConfig,
   PaymentRequired,
   PaymentPayload,
+  PaymentRequirements,
   SettlementResponse,
   MppCredential,
   GenericRequest,
   GenericResponse,
 } from './types.js';
 import { zecToZatoshis } from './types.js';
-import { verifyPayment, validateSession } from './client.js';
+import { verifyPayment, verifyPaymentV2, validateSession } from './client.js';
 
 const HEADER_PAYMENT_SIGNATURE = 'payment-signature';
 const HEADER_PAYMENT_REQUIRED = 'payment-required';
@@ -82,7 +83,7 @@ function extractPayment(headers: Record<string, string | string[] | undefined>):
     } catch { /* fall through */ }
   }
 
-  // Legacy: X-PAYMENT header
+  // @deprecated Legacy V1 header — will be removed in a future major version.
   const legacyHeader = h[HEADER_X_PAYMENT];
   if (legacyHeader) {
     const trimmed = legacyHeader.trim();
@@ -154,6 +155,7 @@ export function createPaywall(config: PaywallConfig) {
 
   const advertise = config.protocol ?? 'both';
   const rejectReplays = config.rejectReplays ?? true;
+  const facilitatorVersion = config.facilitatorVersion ?? 2;
 
   return async function paywall(
     req: GenericRequest,
@@ -205,18 +207,42 @@ export function createPaywall(config: PaywallConfig) {
     }
 
     try {
-      const result = await verifyPayment(
-        payment.txid,
-        amount,
-        config.apiKey,
-        config.facilitatorUrl,
-        payment.protocol,
-      );
+      let isValid: boolean;
+      let isReplay = false;
+      let failReason: string | undefined;
 
-      if (result.valid && !(rejectReplays && result.previously_verified)) {
+      if (facilitatorVersion === 2) {
+        const challengeBody = buildPaymentRequired(config, amount, req.url);
+        const paymentPayload: PaymentPayload = {
+          x402Version: 2,
+          payload: { txid: payment.txid },
+          accepted: challengeBody.accepts[0],
+        };
+        const v2Result = await verifyPaymentV2(
+          paymentPayload,
+          challengeBody.accepts[0],
+          config.apiKey,
+          config.facilitatorUrl,
+        );
+        isValid = v2Result.isValid;
+        failReason = v2Result.invalidReason;
+      } else {
+        const result = await verifyPayment(
+          payment.txid,
+          amount,
+          config.apiKey,
+          config.facilitatorUrl,
+          payment.protocol,
+        );
+        isValid = result.valid && !(rejectReplays && result.previously_verified);
+        isReplay = result.valid && result.previously_verified;
+        failReason = result.reason;
+      }
+
+      if (isValid) {
         const settlement: SettlementResponse = {
           success: true,
-          txid: payment.txid,
+          transaction: payment.txid,
           network: config.network ?? 'zcash:mainnet',
         };
 
@@ -228,7 +254,6 @@ export function createPaywall(config: PaywallConfig) {
 
         await next();
       } else {
-        const isReplay = result.valid && result.previously_verified;
         const body = buildPaymentRequired(config, amount, req.url);
         res.setHeader('Content-Type', 'application/json');
 
@@ -243,7 +268,7 @@ export function createPaywall(config: PaywallConfig) {
           error: isReplay ? 'payment_replayed' : 'payment_invalid',
           reason: isReplay
             ? 'This transaction has already been used. Send a new payment.'
-            : (result.reason ?? 'Payment verification failed'),
+            : (failReason ?? 'Payment verification failed'),
           ...body,
         });
       }

@@ -1,7 +1,18 @@
-import type { VerifyResponse, SessionValidateResponse, SessionDeductResponse, SessionPrepareResponse } from './types.js';
+import type {
+  VerifyResponse,
+  VerifyResponseV2,
+  SettleResponseV2,
+  SupportedResponse,
+  PaymentPayload,
+  PaymentRequirements,
+  SessionValidateResponse,
+  SessionDeductResponse,
+  SessionPrepareResponse,
+} from './types.js';
 
 const DEFAULT_FACILITATOR_URL = 'https://api.cipherpay.app';
 const VERIFY_TIMEOUT_MS = 30_000;
+const SESSION_TIMEOUT_MS = 5_000;
 
 /**
  * Verify a shielded Zcash payment via CipherPay's x402 facilitator.
@@ -44,7 +55,109 @@ export async function verifyPayment(
   }
 }
 
-const SESSION_TIMEOUT_MS = 5_000;
+/**
+ * Verify a payment via x402 V2 spec-compliant facilitator endpoint.
+ * Sends { x402Version, paymentPayload, paymentRequirements } to /api/x402/v2/verify.
+ */
+export async function verifyPaymentV2(
+  paymentPayload: PaymentPayload,
+  paymentRequirements: PaymentRequirements,
+  apiKey: string,
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<VerifyResponseV2> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/x402/v2/verify`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        x402Version: 2,
+        paymentPayload,
+        paymentRequirements,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`CipherPay V2 verify failed (${res.status}): ${text}`);
+    }
+
+    return await res.json() as VerifyResponseV2;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Settle a payment via x402 V2 spec-compliant facilitator endpoint.
+ * For Zcash, settlement is implicit (tx already on-chain), so this mirrors verify.
+ */
+export async function settlePaymentV2(
+  paymentPayload: PaymentPayload,
+  paymentRequirements: PaymentRequirements,
+  apiKey: string,
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<SettleResponseV2> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/x402/v2/settle`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        x402Version: 2,
+        paymentPayload,
+        paymentRequirements,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`CipherPay V2 settle failed (${res.status}): ${text}`);
+    }
+
+    return await res.json() as SettleResponseV2;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Query facilitator capabilities via GET /api/x402/supported.
+ */
+export async function getSupported(
+  facilitatorUrl = DEFAULT_FACILITATOR_URL,
+): Promise<SupportedResponse> {
+  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/x402/supported`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      throw new Error(`CipherPay supported query failed (${res.status})`);
+    }
+    return await res.json() as SupportedResponse;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 /**
  * Validate a session bearer token and deduct one request from the balance.
