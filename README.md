@@ -260,6 +260,7 @@ Same account works for both e-commerce (invoices, checkout) and x402 (API moneti
 - [Zcash](https://z.cash) — Private digital currency
 - [Documentation](https://cipherpay.app/docs) — Full API docs
 - [coinbase/x402](https://github.com/coinbase/x402) — Protocol source
+- [Zipher](https://zipher.to) — Zcash wallet (mobile, desktop & CLI)
 
 ## License
 
