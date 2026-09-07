@@ -265,3 +265,11 @@ Same account works for both e-commerce (invoices, checkout) and x402 (API moneti
 ## License
 
 MIT — [Atmosphere Labs](https://atmospherelabs.dev)
+
+## September 2026 security migration
+
+Deploy this SDK with the repaired CipherPay API. Session charging now requires the merchant API key, an integer zatoshi price, the resource, and a unique request ID. The Express middleware supplies these automatically. Direct callers of `validateSession` or `deductSession` must supply the charge authorization arguments; unauthenticated GET validation has been retired.
+
+A successful session charge authorizes one request. Reusing its request ID does not authorize fulfillment again. V2 settlements returned from an idempotency cache are marked as replayed and the middleware rejects them for a second fulfillment. Both V1 and V2 payment proofs require a confirmed transaction. Clients should wait for confirmation before submitting a payment proof.
+
+Prepared session deposits must use `prepareSession` with the merchant API key and the returned unique address. The legacy shared-address memo flow is no longer accepted. Payment consumption records survive session expiry and account deletion to prevent deposit reuse.
