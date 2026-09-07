@@ -1,6 +1,6 @@
 {
   "name": "@cipherpay/x402",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Accept private Zcash payments on any API via x402, MPP, and session protocols. CipherPay is the Zcash facilitator.",
   "type": "module",
   "main": "dist/index.js",
@@ -24,7 +24,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
-    "test": "node --test dist/test.js"
+    "test": "npm run build && node --test dist/test.js",
+    "typecheck": "tsc --noEmit --incremental false"
   },
   "keywords": [
     "zcash",

@@ -1,7 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import type {
   VerifyResponse,
   VerifyResponseV2,
   SettleResponseV2,
+  SettleSessionConfig,
   SupportedResponse,
   PaymentPayload,
   PaymentRequirements,
@@ -98,40 +100,56 @@ export async function verifyPaymentV2(
 
 /**
  * Settle a payment via x402 V2 spec-compliant facilitator endpoint.
- * For Zcash, settlement is implicit (tx already on-chain), so this mirrors verify.
+ *
+ * Supports auto-session creation: pass `session` config to receive a session
+ * token in the response when the payment covers multiple requests.
+ *
+ * Supports idempotency: pass `idempotencyKey` to safely retry the same request.
  */
 export async function settlePaymentV2(
   paymentPayload: PaymentPayload,
   paymentRequirements: PaymentRequirements,
   apiKey: string,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
+  options?: {
+    session?: SettleSessionConfig;
+    idempotencyKey?: string;
+  },
 ): Promise<SettleResponseV2> {
   const url = `${facilitatorUrl.replace(/\/$/, '')}/api/x402/v2/settle`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${apiKey}`,
+  };
+  if (options?.idempotencyKey) {
+    headers['Idempotency-Key'] = options.idempotencyKey;
+  }
+
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
+      headers,
       body: JSON.stringify({
         x402Version: 2,
         paymentPayload,
         paymentRequirements,
+        ...(options?.session ? { session: options.session } : {}),
       }),
       signal: controller.signal,
     });
 
+    if (res.status === 409) return { success: false, transaction: '', network: paymentRequirements.network, errorReason: 'payment_replayed' };
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(`CipherPay V2 settle failed (${res.status}): ${text}`);
     }
 
-    return await res.json() as SettleResponseV2;
+    const result = await res.json() as SettleResponseV2;
+    return { ...result, replayed: res.headers.get('Idempotency-Replayed') === 'true' };
   } finally {
     clearTimeout(timeout);
   }
@@ -165,9 +183,13 @@ export async function getSupported(
  */
 export async function validateSession(
   token: string,
-  _apiKey: string,
+  apiKey: string,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
+  charge?: { amountZatoshis: number; resource: string; requestId?: string },
 ): Promise<SessionValidateResponse> {
+  if (!charge || !Number.isSafeInteger(charge.amountZatoshis) || charge.amountZatoshis <= 0 || !charge.resource) {
+    throw new Error('Merchant-authenticated session charge requires integer price and resource');
+  }
   const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/validate`;
 
   const controller = new AbortController();
@@ -175,8 +197,10 @@ export async function validateSession(
 
   try {
     const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${token}` },
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, amount_zatoshis: charge.amountZatoshis,
+        resource: charge.resource, request_id: charge.requestId || randomUUID() }),
       signal: controller.signal,
     });
 
@@ -197,31 +221,13 @@ export async function deductSession(
   token: string,
   amountZatoshis: number,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
+  authorization?: { apiKey: string; resource: string; requestId?: string },
 ): Promise<SessionDeductResponse> {
-  const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/deduct`;
+  if (!authorization) throw new Error('Merchant API key and resource are required to meter a session');
+  return validateSession(token, authorization.apiKey, facilitatorUrl, {
+    amountZatoshis, resource: authorization.resource, requestId: authorization.requestId,
+  });
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SESSION_TIMEOUT_MS);
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({ amount_zatoshis: amountZatoshis }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      return { valid: false };
-    }
-
-    return await res.json() as SessionDeductResponse;
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 /**
@@ -230,6 +236,7 @@ export async function deductSession(
 export async function prepareSession(
   merchantId: string,
   facilitatorUrl = DEFAULT_FACILITATOR_URL,
+  apiKey?: string,
 ): Promise<SessionPrepareResponse> {
   const url = `${facilitatorUrl.replace(/\/$/, '')}/api/sessions/prepare`;
 
@@ -239,7 +246,7 @@ export async function prepareSession(
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey || ''}` },
       body: JSON.stringify({ merchant_id: merchantId }),
       signal: controller.signal,
     });

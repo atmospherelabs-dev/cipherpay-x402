@@ -9,7 +9,7 @@ import type {
   GenericResponse,
 } from './types.js';
 import { zecToZatoshis } from './types.js';
-import { verifyPayment, verifyPaymentV2, validateSession } from './client.js';
+import { verifyPayment, verifyPaymentV2, settlePaymentV2, validateSession } from './client.js';
 
 const HEADER_PAYMENT_SIGNATURE = 'payment-signature';
 const HEADER_PAYMENT_REQUIRED = 'payment-required';
@@ -170,7 +170,9 @@ export function createPaywall(config: PaywallConfig) {
     const sessionToken = extractSessionToken(req.headers);
     if (sessionToken) {
       try {
-        const session = await validateSession(sessionToken, config.apiKey, config.facilitatorUrl);
+        const session = await validateSession(sessionToken, config.apiKey, config.facilitatorUrl, {
+          amountZatoshis: Number(zecToZatoshis(amount)), resource: req.url,
+        });
         if (session.valid) {
           res.setHeader('X-Session-Balance', String(session.balance_remaining));
           res.setHeader('X-Session-Id', session.session_id ?? '');
@@ -179,10 +181,12 @@ export function createPaywall(config: PaywallConfig) {
         }
         // Session token recognized but invalid/expired/depleted — require new payment
       } catch {
-        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Type', 'application/problem+json');
         res.status(503).json({
-          error: 'session_validation_unavailable',
-          message: 'Session validation service is temporarily unavailable. Try again shortly.',
+          type: 'https://cipherpay.app/errors/session-validation-unavailable',
+          title: 'Session Validation Unavailable',
+          status: 503,
+          detail: 'Session validation service is temporarily unavailable. Try again shortly.',
         });
         return;
       }
@@ -210,22 +214,31 @@ export function createPaywall(config: PaywallConfig) {
       let isValid: boolean;
       let isReplay = false;
       let failReason: string | undefined;
+      let sessionToken: string | undefined;
 
       if (facilitatorVersion === 2) {
         const challengeBody = buildPaymentRequired(config, amount, req.url);
         const paymentPayload: PaymentPayload = {
           x402Version: 2,
           payload: { txid: payment.txid },
+          resource: challengeBody.resource,
           accepted: challengeBody.accepts[0],
         };
-        const v2Result = await verifyPaymentV2(
+
+        const settleResult = await settlePaymentV2(
           paymentPayload,
           challengeBody.accepts[0],
           config.apiKey,
           config.facilitatorUrl,
+          config.autoSession ? { session: config.autoSession } : undefined,
         );
-        isValid = v2Result.isValid;
-        failReason = v2Result.invalidReason;
+        isReplay = settleResult.replayed === true || settleResult.errorReason === 'payment_replayed';
+        isValid = settleResult.success && !isReplay;
+        failReason = settleResult.errorReason;
+
+        if (settleResult.session?.token) {
+          sessionToken = settleResult.session.token;
+        }
       } else {
         const result = await verifyPayment(
           payment.txid,
@@ -252,10 +265,14 @@ export function createPaywall(config: PaywallConfig) {
         }
         res.setHeader(HEADER_PAYMENT_RESPONSE, toBase64(settlement));
 
+        if (sessionToken) {
+          res.setHeader('X-Session-Token', sessionToken);
+        }
+
         await next();
       } else {
         const body = buildPaymentRequired(config, amount, req.url);
-        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Type', 'application/problem+json');
 
         if (advertise === 'x402' || advertise === 'both') {
           res.setHeader(HEADER_PAYMENT_REQUIRED, toBase64(body));
@@ -264,19 +281,27 @@ export function createPaywall(config: PaywallConfig) {
           res.setHeader('WWW-Authenticate', buildMppChallenge(config, amount, req.url));
         }
 
+        const errorType = isReplay ? 'payment-replayed' : 'payment-invalid';
+        const errorTitle = isReplay ? 'Payment Replayed' : 'Payment Invalid';
+        const errorDetail = isReplay
+          ? 'This transaction has already been used. Send a new payment.'
+          : (failReason ?? 'Payment verification failed');
+
         res.status(402).json({
-          error: isReplay ? 'payment_replayed' : 'payment_invalid',
-          reason: isReplay
-            ? 'This transaction has already been used. Send a new payment.'
-            : (failReason ?? 'Payment verification failed'),
+          type: `https://cipherpay.app/errors/${errorType}`,
+          title: errorTitle,
+          status: 402,
+          detail: errorDetail,
           ...body,
         });
       }
     } catch (err) {
-      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Type', 'application/problem+json');
       res.status(500).json({
-        error: 'verification_error',
-        message: err instanceof Error ? err.message : 'Verification failed',
+        type: 'https://cipherpay.app/errors/verification-error',
+        title: 'Verification Error',
+        status: 500,
+        detail: err instanceof Error ? err.message : 'Verification failed',
       });
     }
   };

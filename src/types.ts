@@ -5,7 +5,9 @@
 const ZATOSHIS_PER_ZEC = 100_000_000;
 
 export function zecToZatoshis(zec: number): string {
-  return Math.round(zec * ZATOSHIS_PER_ZEC).toString();
+  const amount = Math.round(zec * ZATOSHIS_PER_ZEC);
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > 2100000000000000) throw new Error("Price must be a positive integer number of zatoshis within the ZEC supply");
+  return amount.toString();
 }
 
 export function zatoshisToZec(zatoshis: string): number {
@@ -63,6 +65,15 @@ export interface SettlementResponse {
   errorReason?: string;
   amount?: string;
   extensions?: Extensions;
+  session?: SessionInfo;
+}
+
+export interface SessionInfo {
+  token: string;
+  sessionId: string;
+  balanceRemaining: number;
+  costPerRequest: number;
+  expiresAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +138,18 @@ export interface PaywallConfig {
    * Defaults to 2.
    */
   facilitatorVersion?: 1 | 2;
+
+  /**
+   * Auto-session: if set, successful settlements will auto-create a session.
+   * The session token is returned in X-Session-Token response header, and the
+   * agent can use it for subsequent requests via Authorization: Bearer cps_...
+   */
+  autoSession?: {
+    /** Cost per request in zatoshis. Defaults to 1000 (0.00001 ZEC). */
+    costPerRequest?: number;
+    /** Zcash refund address for unused session balance. */
+    refundAddress?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,12 +192,28 @@ export interface VerifyResponseV2 {
 }
 
 export interface SettleResponseV2 {
+  /** A cached settlement is not authorization to execute the resource again. */
+  replayed?: boolean;
   success: boolean;
   transaction: string;
   network: string;
   payer?: string;
   errorReason?: string;
   amount?: string;
+  session?: SessionInfo;
+}
+
+export interface SettleSessionConfig {
+  costPerRequest?: number;
+  refundAddress?: string;
+}
+
+export interface ProblemDetails {
+  type: string;
+  title: string;
+  status: number;
+  detail: string;
+  instance?: string;
 }
 
 export interface SupportedKind {
