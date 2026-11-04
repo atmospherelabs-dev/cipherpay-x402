@@ -113,7 +113,7 @@ describe('credential parsing', () => {
 
   it('detects x402 PAYMENT-SIGNATURE header', async () => {
     const fakeTxid = 'b'.repeat(64);
-    const payload = { payload: { txid: fakeTxid } };
+    const payload = { x402Version: 2, payload: { txid: fakeTxid } };
     const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     const handler = createPaywall({
@@ -217,7 +217,7 @@ describe('session bearer tokens', () => {
         valid: true,
         session_id: 'sess-123',
         balance_remaining: 49000,
-        requests_made: 1,
+        requests_made: 1, deducted: 100000,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
 
@@ -298,7 +298,7 @@ describe('session bearer tokens', () => {
         valid: true,
         session_id: 'sess-priority',
         balance_remaining: 30000,
-        requests_made: 5,
+        requests_made: 5, deducted: 100000,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
 
@@ -307,7 +307,7 @@ describe('session bearer tokens', () => {
       // Send both a session token AND a payment signature
       const req = makeReq('/api/test', {
         Authorization: 'Bearer cps_priority_token',
-        'PAYMENT-SIGNATURE': Buffer.from(JSON.stringify({ payload: { txid: 'a'.repeat(64) } })).toString('base64'),
+        'PAYMENT-SIGNATURE': Buffer.from(JSON.stringify({ x402Version: 2, payload: { txid: 'a'.repeat(64) } })).toString('base64'),
       });
       const res = makeRes();
       let nextCalled = false;
@@ -325,7 +325,7 @@ describe('session bearer tokens', () => {
 describe('V2 facilitator format', () => {
   it('sends V2 format to /api/x402/v2/settle by default', async () => {
     const fakeTxid = 'e'.repeat(64);
-    const payload = { payload: { txid: fakeTxid } };
+    const payload = { x402Version: 2, payload: { txid: fakeTxid } };
     const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     const originalFetch = globalThis.fetch;
@@ -336,7 +336,7 @@ describe('V2 facilitator format', () => {
       capturedUrl = url;
       if (init?.body) capturedBody = JSON.parse(init.body as string);
       return new Response(JSON.stringify({
-        success: true,
+        success: true, transaction: fakeTxid, network: 'zcash:mainnet', amount: '100000',
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     };
 
@@ -367,7 +367,7 @@ describe('V2 facilitator format', () => {
 
   it('rejects invalid payment via V2 facilitator', async () => {
     const fakeTxid = 'f'.repeat(64);
-    const payload = { payload: { txid: fakeTxid } };
+    const payload = { x402Version: 2, payload: { txid: fakeTxid } };
     const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     const originalFetch = globalThis.fetch;
@@ -384,7 +384,7 @@ describe('V2 facilitator format', () => {
 
       assert.equal(res._status, 402, 'invalid V2 payment should return 402');
       assert.equal(res._body?.type, 'https://cipherpay.app/errors/payment-invalid');
-      assert.ok(res._body?.detail?.includes('insufficient_funds'), 'should include V2 reason');
+      assert.equal(res._body?.detail, 'Payment verification failed. Check the confirmed payment and current price.');
       console.log('  V2 rejection OK');
     } finally {
       globalThis.fetch = originalFetch;
@@ -393,7 +393,7 @@ describe('V2 facilitator format', () => {
 
   it('falls back to v1 facilitator when configured', async () => {
     const fakeTxid = 'a'.repeat(64);
-    const payload = { payload: { txid: fakeTxid } };
+    const payload = { x402Version: 2, payload: { txid: fakeTxid } };
     const b64 = Buffer.from(JSON.stringify(payload)).toString('base64');
 
     const originalFetch = globalThis.fetch;
@@ -449,7 +449,7 @@ describe('audit regressions', () => {
   });
   it('never fulfills an idempotently replayed V2 settlement', async () => {
     const original = globalThis.fetch;
-    globalThis.fetch = async () => new Response(JSON.stringify({ success: true, transaction: 'a'.repeat(64) }),
+    globalThis.fetch = async () => new Response(JSON.stringify({ success: true, transaction: 'a'.repeat(64), network: 'zcash:mainnet' }),
       { status: 200, headers: { 'Idempotency-Replayed': 'true' } });
     try {
       const res = makeRes(); let called = false;

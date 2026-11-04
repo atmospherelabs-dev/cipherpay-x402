@@ -1,6 +1,6 @@
 # @cipherpay/x402
 
-Accept private Zcash payments on any API via x402 and [MPP](https://mpp.dev) protocols. One middleware. Fully shielded. No buyer data exposed.
+Accept private Zcash payments on any API via x402 and [MPP](https://mpp.dev) protocols. One middleware for shielded ZEC settlement.
 
 CipherPay is the **Zcash facilitator** for agentic payments — the only way to accept shielded ZEC in the HTTP 402 flow.
 
@@ -8,7 +8,7 @@ CipherPay is the **Zcash facilitator** for agentic payments — the only way to 
 
 Every x402 payment on Base, Solana, or Polygon is public. Anyone can see which APIs an agent is using, how often, and how much it's spending.
 
-Zcash shielded payments make all of that invisible. The buyer (human or AI agent) reveals nothing — no identity, no balance, no transaction history.
+Zcash shielded payments protect on-chain payment amounts and addresses. CipherPay verifies the transaction using the merchant viewing key; the merchant API and facilitator still receive the payment proof and request metadata.
 
 ## Install
 
@@ -67,9 +67,9 @@ Agent                           Your API                    CipherPay
   │  GET /api/premium/data        │                            │
   │  Authorization: Payment ...   │  (or PAYMENT-SIGNATURE)    │
   │──────────────────────────────>│                            │
-  │                               │  POST /api/x402/v2/verify  │
+  │                               │  POST /api/x402/v2/settle  │
   │                               │───────────────────────────>│
-  │                               │  { isValid: true }         │
+  │                               │  { success: true }         │
   │                               │<───────────────────────────│
   │                               │                            │
   │  200 OK                       │                            │
@@ -78,17 +78,19 @@ Agent                           Your API                    CipherPay
 
 ### Session flow (prepaid credit)
 
+First call `prepareSession(merchantId, facilitatorUrl, merchantApiKey)` from a trusted server. Pay the returned unique deposit address, wait for confirmation, then open the session with that prepared `session_request_id` and the deposit txid. Keep merchant API keys on the server.
+
 ```
 Agent                           Your API                    CipherPay
   │                               │                            │
   │  POST /api/sessions/open      │                            │
-  │  { txid, merchant_id }        │───────────────────────────>│
+  │  { txid, session_request_id }│───────────────────────────>│
   │                               │  { bearer_token: cps_... } │
   │<──────────────────────────────│<───────────────────────────│
   │                               │                            │
   │  GET /api/premium/data        │                            │
   │  Authorization: Bearer cps_.. │                            │
-  │──────────────────────────────>│  GET /sessions/validate    │
+  │──────────────────────────────>│  POST /sessions/validate   │
   │                               │───────────────────────────>│
   │                               │  { valid, balance }        │
   │  200 OK                       │<───────────────────────────│
@@ -98,7 +100,7 @@ Agent                           Your API                    CipherPay
 
 ## Replay Protection
 
-By default, the middleware rejects transactions that have already been verified. A replayed txid returns `402` with `"error": "payment_replayed"`.
+By default, the middleware rejects transactions that have already been verified. A replayed txid returns `402` with problem type `https://cipherpay.app/errors/payment-replayed`.
 
 ```typescript
 app.use('/api/premium', zcashPaywall({
@@ -109,7 +111,7 @@ app.use('/api/premium', zcashPaywall({
 }));
 ```
 
-Set `rejectReplays: false` for endpoints where the same transaction should grant repeated access (e.g., downloading a file multiple times after purchase).
+V2 always consumes each receipt once, including when `rejectReplays: false`. That option only affects legacy V1 facilitators that deliberately return previously verified receipts as valid. Implement repeated purchased access using your own authorization layer; a cached settlement response does not authorize running a paid handler again.
 
 ## Protocol Compatibility
 
@@ -119,7 +121,7 @@ Set `rejectReplays: false` for endpoints where the same transaction should grant
 | Credential header | `PAYMENT-SIGNATURE` | `Authorization: Payment` | `Authorization: Bearer cps_...` |
 | Settlement header | `PAYMENT-RESPONSE` | `Payment-Receipt` | `X-Session-Balance` |
 | Replay protection | Yes | Yes | N/A (balance-based) |
-| Per-request cost | Full amount | Full amount | `cost_per_request` from session |
+| Per-request cost | Full amount | Full amount | Current merchant resource price |
 
 ## Framework-Agnostic Usage
 
@@ -165,7 +167,7 @@ import { verifyPaymentV2, getSupported } from '@cipherpay/x402';
 const supported = await getSupported();
 console.log(supported.kinds); // [{ x402Version: 2, scheme: 'exact', network: 'zcash:mainnet' }]
 
-// Verify a payment (x402 V2 spec format)
+// Read-only verification; use settlePaymentV2 before fulfilling a paid request
 const result = await verifyPaymentV2(
   paymentPayload,        // PaymentPayload from PAYMENT-SIGNATURE header
   paymentRequirements,   // PaymentRequirements from your 402 challenge
@@ -242,7 +244,7 @@ AI agents can pay for gated APIs using a shielded Zcash wallet. Three options:
 
 **Sessions (prepaid credit):** Agent sends a deposit transaction, receives a bearer token (`cps_...`), and uses it for subsequent requests. Balance is deducted automatically. Best for high-frequency API usage.
 
-Every payment is fully encrypted on the Zcash blockchain. No observer can see what API the agent called, how much it paid, or how often.
+Shielded payment details are protected on-chain. The HTTP server and facilitator receive payment proofs and request metadata; this library does not hide network traffic or API usage from those parties.
 
 ## Get a CipherPay Account
 
@@ -266,10 +268,16 @@ Same account works for both e-commerce (invoices, checkout) and x402 (API moneti
 
 MIT — [Atmosphere Labs](https://atmospherelabs.dev)
 
-## September 2026 security migration
+## 0.7.0 security migration (November 2026)
 
 Deploy this SDK with the repaired CipherPay API. Session charging now requires the merchant API key, an integer zatoshi price, the resource, and a unique request ID. The Express middleware supplies these automatically. Direct callers of `validateSession` or `deductSession` must supply the charge authorization arguments; unauthenticated GET validation has been retired.
 
 A successful session charge authorizes one request. Reusing its request ID does not authorize fulfillment again. V2 settlements returned from an idempotency cache are marked as replayed and the middleware rejects them for a second fulfillment. Both V1 and V2 payment proofs require a confirmed transaction. Clients should wait for confirmation before submitting a payment proof.
 
 Prepared session deposits must use `prepareSession` with the merchant API key and the returned unique address. The legacy shared-address memo flow is no longer accepted. Payment consumption records survive session expiry and account deletion to prevent deposit reuse.
+
+Prices must be positive and exactly representable in whole zatoshis (up to 8 decimal places). Sub-zatoshi prices and floating-point calculations such as `0.1 + 0.2` are rejected instead of rounded. Compute prices in integer zatoshis, then convert with `zatoshisToZec` when needed. `zatoshisToZec` accepts canonical unsigned integer strings only.
+
+Facilitator URLs require HTTPS; HTTP is allowed only for local loopback development. Redirects are refused, JSON responses are bounded to 1 MiB, and deadlines cover response-body reading. Invalid or inconsistent successful responses fail closed. Transport/contract failures return a generic 503; downstream handler errors propagate to the application's error handler.
+
+Use a maintained patched Node 22, 24 or 26 release. This release is qualified on Node 22.23.4, 24.22.2 and 26.13.0; Node 18/20 are no longer supported. The optional Express adapter supports patched Express 4.22.3+ and 5.3.0+. CI runs the same major-version matrix. Tests use synthetic local receipts, session charges and HTTP servers; no funded payment, production settlement or real session deposit is part of package qualification. Server-side confirmation, recipient verification and atomic receipt consumption remain required.

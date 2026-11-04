@@ -9,7 +9,8 @@ import type {
   GenericResponse,
 } from './types.js';
 import { zecToZatoshis } from './types.js';
-import { verifyPayment, verifyPaymentV2, settlePaymentV2, validateSession } from './client.js';
+import { facilitatorBase, text, integer, merchantKey } from './http.js';
+import { verifyPayment, settlePaymentV2, validateSession } from './client.js';
 
 const HEADER_PAYMENT_SIGNATURE = 'payment-signature';
 const HEADER_PAYMENT_REQUIRED = 'payment-required';
@@ -22,7 +23,7 @@ function normalizeHeaders(headers: Record<string, string | string[] | undefined>
   const out: Record<string, string> = {};
   for (const [key, val] of Object.entries(headers)) {
     const v = Array.isArray(val) ? val[0] : val;
-    if (v) out[key.toLowerCase()] = v;
+    if (v && v.length <= 16_384) out[key.toLowerCase()] = v;
   }
   return out;
 }
@@ -55,7 +56,7 @@ function extractPayment(headers: Record<string, string | string[] | undefined>):
       try {
         const json = Buffer.from(mppMatch[1], 'base64url').toString('utf-8');
         const cred: MppCredential = JSON.parse(json);
-        if (cred.payload?.txid && /^[a-fA-F0-9]{64}$/.test(cred.payload.txid)) {
+        if (cred.method === 'zcash' && typeof cred.payload?.txid === 'string' && /^[a-fA-F0-9]{64}$/.test(cred.payload.txid)) {
           return { txid: cred.payload.txid, protocol: 'mpp' };
         }
       } catch {
@@ -63,7 +64,7 @@ function extractPayment(headers: Record<string, string | string[] | undefined>):
         try {
           const json = Buffer.from(mppMatch[1], 'base64').toString('utf-8');
           const cred: MppCredential = JSON.parse(json);
-          if (cred.payload?.txid && /^[a-fA-F0-9]{64}$/.test(cred.payload.txid)) {
+          if (cred.method === 'zcash' && typeof cred.payload?.txid === 'string' && /^[a-fA-F0-9]{64}$/.test(cred.payload.txid)) {
             return { txid: cred.payload.txid, protocol: 'mpp' };
           }
         } catch { /* fall through */ }
@@ -77,7 +78,7 @@ function extractPayment(headers: Record<string, string | string[] | undefined>):
     try {
       const json = Buffer.from(sigHeader, 'base64').toString('utf-8');
       const payload: PaymentPayload = JSON.parse(json);
-      if (payload.payload?.txid && /^[a-fA-F0-9]{64}$/.test(payload.payload.txid)) {
+      if (payload.x402Version === 2 && typeof payload.payload?.txid === 'string' && /^[a-fA-F0-9]{64}$/.test(payload.payload.txid)) {
         return { txid: payload.payload.txid, protocol: 'x402' };
       }
     } catch { /* fall through */ }
@@ -149,8 +150,17 @@ export type NextFunction = () => void | Promise<void>;
  * the 402 response.
  */
 export function createPaywall(config: PaywallConfig) {
-  if (!config.address) throw new Error('@cipherpay/x402: address is required');
-  if (!config.apiKey) throw new Error('@cipherpay/x402: apiKey is required');
+  if (!text(config.address)) throw new Error('@cipherpay/x402: address is required');
+  merchantKey(config.apiKey);
+  if (config.facilitatorUrl !== undefined) facilitatorBase(config.facilitatorUrl);
+  if (config.network !== undefined && !['zcash:mainnet', 'zcash:testnet'].includes(config.network)) throw new Error('Unsupported Zcash network');
+  if (config.facilitatorVersion !== undefined && ![1, 2].includes(config.facilitatorVersion)) throw new Error('Unsupported facilitator version');
+  if (config.protocol !== undefined && !['x402', 'mpp', 'both'].includes(config.protocol)) throw new Error('Unsupported protocol');
+  for (const timeout of [config.maxTimeoutSeconds, config.challengeTimeoutSeconds]) {
+    if (timeout !== undefined && (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 86_400)) throw new Error('Invalid challenge timeout');
+  }
+  if (!config.getAmount) zecToZatoshis(config.amount);
+  if (config.autoSession?.costPerRequest !== undefined && !integer(config.autoSession.costPerRequest, true)) throw new Error('Invalid session price');
   if (!config.amount && !config.getAmount) throw new Error('@cipherpay/x402: amount or getAmount is required');
 
   const advertise = config.protocol ?? 'both';
@@ -166,18 +176,22 @@ export function createPaywall(config: PaywallConfig) {
       ? await config.getAmount(req)
       : config.amount;
 
+    zecToZatoshis(amount);
+    const resourceUrl = req.originalUrl ?? req.url;
+    if (!text(resourceUrl, 2048)) throw new Error('Invalid payment resource URL');
+
     // Session bearer tokens take priority — instant, no per-tx verification
     const sessionToken = extractSessionToken(req.headers);
     if (sessionToken) {
+      let accepted = false;
       try {
         const session = await validateSession(sessionToken, config.apiKey, config.facilitatorUrl, {
-          amountZatoshis: Number(zecToZatoshis(amount)), resource: req.url,
+          amountZatoshis: Number(zecToZatoshis(amount)), resource: resourceUrl,
         });
         if (session.valid) {
           res.setHeader('X-Session-Balance', String(session.balance_remaining));
           res.setHeader('X-Session-Id', session.session_id ?? '');
-          await next();
-          return;
+          accepted = true;
         }
         // Session token recognized but invalid/expired/depleted — require new payment
       } catch {
@@ -190,12 +204,13 @@ export function createPaywall(config: PaywallConfig) {
         });
         return;
       }
+      if (accepted) { await next(); return; }
     }
 
     const payment = extractPayment(req.headers);
 
     if (!payment) {
-      const body = buildPaymentRequired(config, amount, req.url);
+      const body = buildPaymentRequired(config, amount, resourceUrl);
 
       res.setHeader('Content-Type', 'application/json');
 
@@ -203,21 +218,21 @@ export function createPaywall(config: PaywallConfig) {
         res.setHeader(HEADER_PAYMENT_REQUIRED, toBase64(body));
       }
       if (advertise === 'mpp' || advertise === 'both') {
-        res.setHeader('WWW-Authenticate', buildMppChallenge(config, amount, req.url));
+        res.setHeader('WWW-Authenticate', buildMppChallenge(config, amount, resourceUrl));
       }
 
       res.status(402).json(body);
       return;
     }
 
+    let authorized = false;
     try {
       let isValid: boolean;
       let isReplay = false;
-      let failReason: string | undefined;
       let sessionToken: string | undefined;
 
       if (facilitatorVersion === 2) {
-        const challengeBody = buildPaymentRequired(config, amount, req.url);
+        const challengeBody = buildPaymentRequired(config, amount, resourceUrl);
         const paymentPayload: PaymentPayload = {
           x402Version: 2,
           payload: { txid: payment.txid },
@@ -234,7 +249,6 @@ export function createPaywall(config: PaywallConfig) {
         );
         isReplay = settleResult.replayed === true || settleResult.errorReason === 'payment_replayed';
         isValid = settleResult.success && !isReplay;
-        failReason = settleResult.errorReason;
 
         if (settleResult.session?.token) {
           sessionToken = settleResult.session.token;
@@ -249,7 +263,6 @@ export function createPaywall(config: PaywallConfig) {
         );
         isValid = result.valid && !(rejectReplays && result.previously_verified);
         isReplay = result.valid && result.previously_verified;
-        failReason = result.reason;
       }
 
       if (isValid) {
@@ -269,23 +282,23 @@ export function createPaywall(config: PaywallConfig) {
           res.setHeader('X-Session-Token', sessionToken);
         }
 
-        await next();
+        authorized = true;
       } else {
-        const body = buildPaymentRequired(config, amount, req.url);
+        const body = buildPaymentRequired(config, amount, resourceUrl);
         res.setHeader('Content-Type', 'application/problem+json');
 
         if (advertise === 'x402' || advertise === 'both') {
           res.setHeader(HEADER_PAYMENT_REQUIRED, toBase64(body));
         }
         if (advertise === 'mpp' || advertise === 'both') {
-          res.setHeader('WWW-Authenticate', buildMppChallenge(config, amount, req.url));
+          res.setHeader('WWW-Authenticate', buildMppChallenge(config, amount, resourceUrl));
         }
 
         const errorType = isReplay ? 'payment-replayed' : 'payment-invalid';
         const errorTitle = isReplay ? 'Payment Replayed' : 'Payment Invalid';
         const errorDetail = isReplay
           ? 'This transaction has already been used. Send a new payment.'
-          : (failReason ?? 'Payment verification failed');
+          : 'Payment verification failed. Check the confirmed payment and current price.';
 
         res.status(402).json({
           type: `https://cipherpay.app/errors/${errorType}`,
@@ -295,14 +308,15 @@ export function createPaywall(config: PaywallConfig) {
           ...body,
         });
       }
-    } catch (err) {
+    } catch {
       res.setHeader('Content-Type', 'application/problem+json');
-      res.status(500).json({
+      res.status(503).json({
         type: 'https://cipherpay.app/errors/verification-error',
-        title: 'Verification Error',
-        status: 500,
-        detail: err instanceof Error ? err.message : 'Verification failed',
+        title: 'Verification Unavailable',
+        status: 503,
+        detail: 'Payment verification is temporarily unavailable. Try again shortly.',
       });
     }
+    if (authorized) await next();
   };
 }
