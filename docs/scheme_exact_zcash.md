@@ -257,7 +257,7 @@ Only the facilitator (holding the recipient's viewing key) can verify the paymen
 
 3. **Confirmation depth**: For high-value payments, resource servers MAY require a minimum number of block confirmations before granting access. For micropayments, mempool presence is typically sufficient.
 
-4. **Transaction finality**: Zcash uses Proof-of-Work consensus with a target block time of 75 seconds. Zero-confirmation payments are suitable for low-value API calls but carry a theoretical double-spend risk for large amounts.
+4. **Transaction finality**: Zcash uses Proof-of-Work consensus with a target block time of 25 seconds since NU7 (75 seconds before). Zero-confirmation payments are suitable for low-value API calls but carry a theoretical double-spend risk for large amounts.
 
 ### Reference Facilitator
 
