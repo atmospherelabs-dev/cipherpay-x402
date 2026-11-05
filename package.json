@@ -1,6 +1,6 @@
 {
   "name": "@cipherpay/x402",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Accept private Zcash payments on any API via x402, MPP, and session protocols. CipherPay is the Zcash facilitator.",
   "type": "module",
   "main": "dist/index.js",
@@ -17,6 +17,8 @@
   },
   "files": [
     "dist",
+    "!dist/test.*",
+    "!dist/security.test.*",
     "README.md",
     "LICENSE"
   ],
@@ -24,7 +26,8 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
-    "test": "node --test dist/test.js"
+    "test": "npm run build && node --test dist/test.js dist/security.test.js",
+    "typecheck": "tsc --noEmit --incremental false"
   },
   "keywords": [
     "zcash",
@@ -50,11 +53,12 @@
   },
   "homepage": "https://cipherpay.app/docs#x402",
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.20.5",
+    "express": "^5.3.0",
+    "typescript": "^7.0.2"
   },
   "peerDependencies": {
-    "express": ">=4.0.0"
+    "express": "^4.22.3 || ^5.3.0"
   },
   "peerDependenciesMeta": {
     "express": {
@@ -62,6 +66,6 @@
     }
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.23.4"
   }
 }

@@ -4,12 +4,24 @@
 
 const ZATOSHIS_PER_ZEC = 100_000_000;
 
+/** Convert a decimal ZEC price exactly; never round a sub-zatoshi price. */
 export function zecToZatoshis(zec: number): string {
-  return Math.round(zec * ZATOSHIS_PER_ZEC).toString();
+  if (!Number.isFinite(zec) || zec <= 0 || zec > 21_000_000) throw new Error('Price must be positive and within the ZEC supply');
+  const [coefficient, exponent = '0'] = zec.toString().toLowerCase().split('e');
+  const [whole, fraction = ''] = coefficient.split('.');
+  const digits = BigInt(whole + fraction);
+  const scale = 8 + Number(exponent) - fraction.length;
+  if (scale >= 0) return (digits * 10n ** BigInt(scale)).toString();
+  const divisor = 10n ** BigInt(-scale);
+  if (digits % divisor !== 0n) throw new Error('Price must be representable in whole zatoshis (at most 8 decimal places)');
+  return (digits / divisor).toString();
 }
 
 export function zatoshisToZec(zatoshis: string): number {
-  return parseInt(zatoshis, 10) / ZATOSHIS_PER_ZEC;
+  if (typeof zatoshis !== 'string' || !/^(0|[1-9][0-9]{0,15})$/.test(zatoshis) || BigInt(zatoshis) > 2_100_000_000_000_000n) {
+    throw new Error('Invalid zatoshi amount');
+  }
+  return Number(zatoshis) / ZATOSHIS_PER_ZEC;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +75,15 @@ export interface SettlementResponse {
   errorReason?: string;
   amount?: string;
   extensions?: Extensions;
+  session?: SessionInfo;
+}
+
+export interface SessionInfo {
+  token: string;
+  sessionId: string;
+  balanceRemaining: number;
+  costPerRequest: number;
+  expiresAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,9 +124,9 @@ export interface PaywallConfig {
   protocol?: 'x402' | 'mpp' | 'both';
 
   /**
-   * Reject payments that have already been verified (replay protection).
-   * Defaults to true. Set to false for idempotent retry patterns or
-   * session-based access where one payment covers multiple requests.
+   * Legacy V1 replay policy. V2 settlements are always consumed once.
+   * Defaults to true. An explicit false only permits legacy V1 facilitators
+   * that deliberately return a previously verified payment as valid.
    */
   rejectReplays?: boolean;
 
@@ -127,6 +148,18 @@ export interface PaywallConfig {
    * Defaults to 2.
    */
   facilitatorVersion?: 1 | 2;
+
+  /**
+   * Auto-session: if set, successful settlements will auto-create a session.
+   * The session token is returned in X-Session-Token response header, and the
+   * agent can use it for subsequent requests via Authorization: Bearer cps_...
+   */
+  autoSession?: {
+    /** Cost per request in zatoshis. Defaults to 1000 (0.00001 ZEC). */
+    costPerRequest?: number;
+    /** Zcash refund address for unused session balance. */
+    refundAddress?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,12 +202,28 @@ export interface VerifyResponseV2 {
 }
 
 export interface SettleResponseV2 {
+  /** A cached settlement is not authorization to execute the resource again. */
+  replayed?: boolean;
   success: boolean;
   transaction: string;
   network: string;
   payer?: string;
   errorReason?: string;
   amount?: string;
+  session?: SessionInfo;
+}
+
+export interface SettleSessionConfig {
+  costPerRequest?: number;
+  refundAddress?: string;
+}
+
+export interface ProblemDetails {
+  type: string;
+  title: string;
+  status: number;
+  detail: string;
+  instance?: string;
 }
 
 export interface SupportedKind {
@@ -195,6 +244,8 @@ export interface SessionValidateResponse {
   session_id?: string;
   balance_remaining?: number;
   requests_made?: number;
+  /** Exact zatoshi amount atomically deducted for this successful charge. */
+  deducted?: number;
   reason?: string;
 }
 
@@ -236,6 +287,8 @@ export interface WellKnownPayment {
 export interface GenericRequest {
   method: string;
   url: string;
+  /** Express keeps the mounted path here; used for resource binding when present. */
+  originalUrl?: string;
   headers: Record<string, string | string[] | undefined>;
 }
 
